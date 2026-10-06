@@ -8,6 +8,7 @@ Calendar: native WebKit window with dark theme.
 import subprocess, sys, os, json, calendar
 from datetime import datetime
 from pathlib import Path
+import signal
 
 import rumps
 import objc
@@ -25,6 +26,30 @@ from WebKit import (
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import db
 from session_tracker import compute_duration, format_balance
+
+
+# ═══════════════════════════════════════════════════
+#  SINGLE INSTANCE LOCK
+# ═══════════════════════════════════════════════════
+
+LOCK_FILE = Path.home() / ".zoom_french_tracker" / ".app.lock"
+
+def acquire_lock():
+    """Return True if this is the first instance, False if another is running."""
+    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if LOCK_FILE.exists():
+        try:
+            pid = int(LOCK_FILE.read_text().strip())
+            os.kill(pid, 0)
+            return False
+        except (OSError, ValueError):
+            pass
+    LOCK_FILE.write_text(str(os.getpid()))
+    return True
+
+def release_lock():
+    try: LOCK_FILE.unlink(missing_ok=True)
+    except: pass
 
 
 # ═══════════════════════════════════════════════════
@@ -379,8 +404,15 @@ class ZoomFrenchTracker(rumps.App):
         try:
             if self.cal_win: self.cal_win.win.close()
         except: pass
+        release_lock()
         rumps.quit_application()
 
 
 if __name__ == "__main__":
-    ZoomFrenchTracker().run()
+    if not acquire_lock():
+        rumps.notification("Zoom French Tracker", "", "Ya está corriendo en la barra de menú.")
+        sys.exit(0)
+    try:
+        ZoomFrenchTracker().run()
+    finally:
+        release_lock()
