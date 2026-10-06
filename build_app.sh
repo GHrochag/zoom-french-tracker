@@ -3,9 +3,8 @@
 # Build Zoom French Tracker as a standalone macOS .app bundle.
 # Output: dist/Zoom French Tracker.app
 #
-# Prerequisites: Python 3.9+ with tkinter
-#   If using Homebrew Python: brew install python-tk
-#   If using python.org Python: tkinter is included
+# Prerequisites: Python 3.9+
+#   Uses pure AppKit — no tkinter, no WebKit
 #
 # Usage:  bash build_app.sh
 
@@ -49,7 +48,7 @@ VENV_PYTHON="$VENV_DIR/bin/python"
 # ── Install dependencies ───────────────────────────────────
 echo "→ Installing dependencies..."
 "$VENV_PYTHON" -m pip install --upgrade pip setuptools wheel 2>&1 | tail -1
-"$VENV_PYTHON" -m pip install py2app rumps "pyobjc-framework-WebKit" 2>&1 | tail -3
+"$VENV_PYTHON" -m pip install py2app rumps 2>&1 | tail -3
 
 # ── Clean previous builds ──────────────────────────────────
 rm -rf build dist
