@@ -120,8 +120,10 @@ body {
     border-radius: 5px; font-size: 13px; font-weight: 500;
     background: #181825; color: #585b70; min-height: 36px;
 }
-.cal .day.cm { color: #cdd6f4; }
+.cal .day.cm { color: #cdd6f4; cursor: pointer; }
+.cal .day.cm:hover { filter: brightness(1.3); }
 .cal .day.td { outline: 2px solid #f9e2af; outline-offset: -2px; }
+.cal .day.selected { outline: 2px solid #89b4fa !important; outline-offset: -2px; }
 .cal .day.hh { font-weight: 700; }
 .cal .day.l0 { }  /* no hours */
 .cal .day.l1 { background: #1a3a2a; color: #a6e3a1; }
@@ -190,7 +192,10 @@ def build_html(year: int, month: int) -> str:
                 inner = f"<span>{day}</span>"
                 if h > 0:
                     inner += f'<span class="hrs">{format_balance(h)}</span>'
-                cal_cells += f'<div class="{cls}">{inner}</div>'
+                cal_cells += (
+                    f'<div class="{cls}" onclick="showDay({year},{month},{day},event)">'
+                    f'{inner}</div>'
+                )
 
     legend = ""
     for lvl, label, color in [
@@ -198,6 +203,19 @@ def build_html(year: int, month: int) -> str:
         (3, "1.5h", "#74c7ec"), (4, "2.0h", "#89b4fa"),
     ]:
         legend += f'<span><i style="background:{color}"></i>{label}</span>'
+
+    # Build sessions JSON for JS (day-level detail)
+    sessions_json = []
+    for s in db.get_month_sessions(year, month):
+        sd = datetime.strptime(s["start_time"], "%Y-%m-%d %H:%M:%S")
+        ed = datetime.strptime(s["end_time"], "%Y-%m-%d %H:%M:%S") if s["end_time"] else None
+        sessions_json.append({
+            "day": sd.day,
+            "date": sd.strftime("%d %b"),
+            "start": sd.strftime("%H:%M"),
+            "end": ed.strftime("%H:%M") if ed else "--",
+            "hours": format_balance(s["rounded_hours"]),
+        })
 
     hist = ""
     if sessions:
@@ -244,15 +262,62 @@ def build_html(year: int, month: int) -> str:
 
 <div class="cal">{cal_cells}</div>
 
+<div id="day-detail" style="display:none;background:#313244;border-radius:8px;padding:12px;margin:0 0 12px 0">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <span id="day-title" style="font-weight:700;color:#89b4fa;font-size:14px"></span>
+        <button onclick="closeDay()" style="background:none;border:none;color:#585b70;font-size:16px;cursor:pointer">✕</button>
+    </div>
+    <div id="day-sessions"></div>
+</div>
+
 <div class="legend">{legend}</div>
 
 <div class="section-title">📋 Historial</div>
 {hist}
 
 <script>
+var SESSIONS = {json.dumps(sessions_json)};
+
+function post(msg) {{
+    try {{ window.webkit.messageHandlers.navigate.postMessage(msg); }} catch(e) {{}}
+}}
+
 function nav(y,m,e) {{
     e.preventDefault(); e.stopPropagation();
-    window.webkit.messageHandlers.navigate.postMessage({{year:y,month:m}});
+    post({{action:'navigate',year:y,month:m}});
+}}
+
+function showDay(y,m,d,e) {{
+    e.stopPropagation();
+    closeDay();
+    var el = e.currentTarget;
+    el.classList.add('selected');
+
+    var daySessions = SESSIONS.filter(function(s) {{ return s.day === d; }});
+    var detail = document.getElementById('day-detail');
+    var title = document.getElementById('day-title');
+    var list = document.getElementById('day-sessions');
+
+    title.textContent = d + ' ' + '{MESES[month]}' + ' ' + y;
+
+    if (daySessions.length === 0) {{
+        list.innerHTML = '<div style="color:#585b70;font-size:12px;padding:4px 0">Sin sesiones este día.</div>';
+    }} else {{
+        var html = '<table style="width:100%;font-size:12px;border-collapse:collapse">';
+        html += '<tr style="color:#a6adc8;font-size:10px"><th style="text-align:left;padding:4px">Inicio</th><th style="text-align:left">Fin</th><th style="text-align:right">Horas</th></tr>';
+        daySessions.forEach(function(s) {{
+            html += '<tr><td style="padding:4px">'+s.start+'</td><td>'+s.end+'</td><td style="text-align:right;font-weight:700">'+s.hours+'</td></tr>';
+        }});
+        html += '</table>';
+        list.innerHTML = html;
+    }}
+    detail.style.display = 'block';
+    detail.scrollIntoView({{behavior:'smooth'}});
+}}
+
+function closeDay() {{
+    document.querySelectorAll('.day.selected').forEach(function(el) {{ el.classList.remove('selected'); }});
+    document.getElementById('day-detail').style.display = 'none';
 }}
 </script>
 </body></html>"""
@@ -265,7 +330,7 @@ function nav(y,m,e) {{
 if WEBKIT_AVAILABLE:
 
     class NavHandler(objc.lookUpClass("NSObject")):
-        """Handle navigation messages from the web view."""
+        """Handle messages from the web view (JS → Python)."""
 
         def initWithApp_(self, app):
             self = objc.super(NavHandler, self).init()
@@ -279,15 +344,27 @@ if WEBKIT_AVAILABLE:
             self, controller, message
         ):
             body = message.body()
-            if isinstance(body, dict) and "year" in body:
-                objc.performSelectorOnMainThread_withObject_waitUntilDone_(
-                    self, "_navigate:", body, False
-                )
+            try:
+                action = str(body["action"])
+            except (KeyError, TypeError):
+                return
+            objc.performSelectorOnMainThread_withObject_waitUntilDone_(
+                self, "_dispatch:", body, False
+            )
 
-        def _navigate_(self, info):
-            year = int(info["year"])
-            month = int(info["month"])
-            self._app._reload_webview(year, month)
+        def _dispatch_(self, body):
+            try:
+                action = str(body["action"])
+                if action == "navigate":
+                    self._app._reload_webview(
+                        int(body["year"]), int(body["month"])
+                    )
+                elif action == "day":
+                    self._app._show_day_detail(
+                        int(body["year"]), int(body["month"]), int(body["day"])
+                    )
+            except Exception:
+                pass
 
     def _create_popup(app):
         """Create a floating NSWindow with WKWebView."""
