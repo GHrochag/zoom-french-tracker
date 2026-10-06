@@ -19,10 +19,13 @@ import rumps
 import objc
 from Foundation import (
     NSBundle, NSURLRequest, NSURL, NSTimer, NSDictionary,
-    NSMutableParagraphStyle, NSParagraphStyleAttributeName,
-    NSFontAttributeName, NSForegroundColorAttributeName,
-    NSAttributedString, NSMakeRect,
+    NSMutableParagraphStyle, NSAttributedString, NSMakeRect,
 )
+
+# NSAttributedString keys as raw strings (avoids PyObjC version issues)
+NS_FONT = 'NSFont'
+NS_FG_COLOR = 'NSForegroundColor'
+NS_PARA = 'NSParagraphStyle'
 from AppKit import (
     NSWindow, NSBackingStoreBuffered,
     NSFloatingWindowLevel, NSView, NSScrollView,
@@ -245,9 +248,9 @@ class CalendarView(NSView):
         elif align == 'right':
             para.setAlignment_(1)
         attrs = {
-            NSFontAttributeName: font,
-            NSForegroundColorAttributeName: NSColor.colorWithRed_green_blue_alpha_(*color),
-            NSParagraphStyleAttributeName: para,
+            NS_FONT: font,
+            NS_FG_COLOR: NSColor.colorWithRed_green_blue_alpha_(*color),
+            NS_PARA: para,
         }
         attr_str = NSAttributedString.alloc().initWithString_attributes_(text, attrs)
         size = attr_str.size()
@@ -264,8 +267,8 @@ class CalendarView(NSView):
         title = f"{MESES[self._month]} {self._year}"
         font = NSFont.boldSystemFontOfSize_(15)
         attrs = {
-            NSFontAttributeName: font,
-            NSForegroundColorAttributeName: NSColor.colorWithRed_green_blue_alpha_(*CLR_TEXT),
+            NS_FONT: font,
+            NS_FG_COLOR: NSColor.colorWithRed_green_blue_alpha_(*CLR_TEXT),
         }
         t = NSAttributedString.alloc().initWithString_attributes_(title, attrs)
         ts = t.size()
@@ -481,9 +484,9 @@ class DayDetailView(NSView):
         if align == 'center':
             para.setAlignment_(2)
         attrs = {
-            NSFontAttributeName: font,
-            NSForegroundColorAttributeName: NSColor.colorWithRed_green_blue_alpha_(*color),
-            NSParagraphStyleAttributeName: para,
+            NS_FONT: font,
+            NS_FG_COLOR: NSColor.colorWithRed_green_blue_alpha_(*color),
+            NS_PARA: para,
         }
         attr_str = NSAttributedString.alloc().initWithString_attributes_(text, attrs)
         size = attr_str.size()
