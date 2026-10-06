@@ -457,16 +457,25 @@ class ZoomFrenchTracker(rumps.App):
             rumps.alert("Error", "WebKit no disponible.")
             return
 
-        if self._popup_window and self._popup_window.isVisible():
-            self._popup_window.makeKeyAndOrderFront_(None)
-            NSApp.activateIgnoringOtherApps_(True)
-            return
+        # Always close any existing window first
+        if self._popup_window is not None:
+            try:
+                self._popup_window.close()
+            except Exception:
+                pass
+            self._popup_window = None
+            self._webview = None
 
-        self._popup_window, self._webview = _create_popup(self)
-        now = datetime.now()
-        self._load_html(now.year, now.month)
-        self._popup_window.makeKeyAndOrderFront_(None)
-        NSApp.activateIgnoringOtherApps_(True)
+        try:
+            self._popup_window, self._webview = _create_popup(self)
+            self._popup_window.setReleasedWhenClosed_(False)
+            now = datetime.now()
+            self._load_html(now.year, now.month)
+            self._popup_window.makeKeyAndOrderFront_(None)
+        except Exception as e:
+            self._popup_window = None
+            self._webview = None
+            rumps.alert("Error", f"No se pudo abrir el calendario:\n{e}")
 
     def _load_html(self, year, month):
         """Load calendar HTML into the web view."""
