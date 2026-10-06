@@ -49,23 +49,30 @@ from session_tracker import compute_duration, format_balance
 #  ZOOM DETECTION
 # ═══════════════════════════════════════════════════════════════
 
-def is_zoom_running() -> bool:
+def is_in_meeting() -> bool:
+    """Check if a Zoom meeting is active.
+
+    Zoom spawns a process called CptHost only during active meetings.
+    It terminates as soon as you leave/hang up — even if Zoom.app stays open.
+    This is far more precise than checking if Zoom.app is running.
+    """
     try:
         result = subprocess.run(
-            ["pgrep", "-ix", "zoom.us"],
+            ["pgrep", "-x", "CptHost"],
             capture_output=True, text=True, timeout=3,
         )
-        if result.returncode == 0:
-            return True
+        return result.returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
+
+    # Fallback: scan process list
     try:
         result = subprocess.run(
             ["ps", "-eo", "comm"],
             capture_output=True, text=True, timeout=3,
         )
         for line in result.stdout.splitlines():
-            if "zoom.us" in line.lower():
+            if line.strip() == "CptHost":
                 return True
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
@@ -395,7 +402,7 @@ if WEBKIT_AVAILABLE:
 class ZoomFrenchTracker(rumps.App):
     def __init__(self):
         super().__init__(name="ZoomFrenchTracker", title="🇫🇷 --h")
-        self.zoom_running = False
+        self.in_meeting = False
         self.active_session_id = None
         self._alert_2h_fired = False
         self._alert_1h_fired = False
@@ -425,12 +432,12 @@ class ZoomFrenchTracker(rumps.App):
 
     def _tick(self, _):
         try:
-            zoom_now = is_zoom_running()
-            if zoom_now and not self.zoom_running:
+            meeting_now = is_in_meeting()
+            if meeting_now and not self.in_meeting:
                 self._on_zoom_started()
-            elif not zoom_now and self.zoom_running:
+            elif not meeting_now and self.in_meeting:
                 self._on_zoom_stopped()
-            self.zoom_running = zoom_now
+            self.in_meeting = meeting_now
             self._update_display()
         except Exception:
             pass
@@ -465,7 +472,8 @@ class ZoomFrenchTracker(rumps.App):
 
     def _update_display(self):
         balance = db.get_balance()
-        self.title = f"⚠️ {format_balance(balance)}" if balance <= 1 else f"🇫🇷 {format_balance(balance)}"
+        prefix = "🟢 " if self.in_meeting else "🇫🇷 "
+        self.title = f"⚠️ {format_balance(balance)}" if balance <= 1 else f"{prefix}{format_balance(balance)}"
 
     def _check_alerts(self):
         balance = db.get_balance()
