@@ -17,17 +17,27 @@ from pathlib import Path
 try:
     import rumps
     import objc
+    from Foundation import NSBundle, NSURLRequest, NSURL
     from AppKit import (
         NSWindow, NSWindowStyleMaskTitled, NSWindowStyleMaskClosable,
         NSWindowStyleMaskResizable, NSBackingStoreBuffered,
         NSFloatingWindowLevel, NSWindowCollectionBehaviorCanJoinAllSpaces,
         NSWindowCollectionBehaviorStationary,
-        NSScreen, NSApp, NSApplicationActivationPolicyAccessory,
+        NSScreen, NSApp,
     )
-    from WebKit import WKWebView, WKWebViewConfiguration, WKUserContentController
-    from Foundation import NSURLRequest, NSURL
-    WEBKIT_AVAILABLE = True
-except ImportError as e:
+
+    # Load WebKit framework directly from macOS — always available,
+    # no pip package needed. Uses the system /System/Library/Frameworks.
+    _webkit_path = '/System/Library/Frameworks/WebKit.framework'
+    _webkit_bundle = NSBundle.bundleWithPath_(_webkit_path)
+    if _webkit_bundle and _webkit_bundle.load():
+        WKWebView = objc.lookUpClass('WKWebView')
+        WKWebViewConfiguration = objc.lookUpClass('WKWebViewConfiguration')
+        WKUserContentController = objc.lookUpClass('WKUserContentController')
+        WEBKIT_AVAILABLE = True
+    else:
+        WEBKIT_AVAILABLE = False
+except ImportError:
     WEBKIT_AVAILABLE = False
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
