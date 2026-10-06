@@ -13,7 +13,7 @@ OPTIONS = {
         "CFBundleName": "Zoom French Tracker",
         "CFBundleIdentifier": "com.nous.zoomfrenchtracker",
     },
-    "packages": ["rumps", "WebKit"],
+    "packages": ["rumps"],
     "includes": ["db", "session_tracker"],
     "excludes": ["tkinter", "matplotlib", "PyQt5", "PyQt6"],
 }
