@@ -1,6 +1,6 @@
 """
 py2app setup script for Zoom French Tracker.
-Builds a standalone .app bundle for macOS — no Terminal needed.
+Builds a standalone .app bundle for macOS.
 """
 from setuptools import setup
 
@@ -14,12 +14,12 @@ OPTIONS = {
         "CFBundleIdentifier": "com.nous.zoomfrenchtracker",
         "CFBundleVersion": "1.0.0",
         "CFBundleShortVersionString": "1.0.0",
-        "LSUIElement": True,  # Menu bar only — no Dock icon
+        "LSUIElement": True,
         "NSHighResolutionCapable": True,
     },
-    "packages": ["rumps", "matplotlib", "tkinter"],
+    "packages": ["rumps"],
     "includes": ["db", "session_tracker"],
-    "excludes": ["wx", "PyQt5", "PyQt6", "PySide2", "PySide6", "tkinter.test"],
+    "excludes": ["wx", "PyQt5", "PyQt6", "PySide2", "PySide6"],
     "site_packages": True,
 }
 

@@ -38,15 +38,6 @@ if [ -z "$PYTHON" ]; then
 fi
 echo "→ Python: $($PYTHON --version)"
 
-# ── Check tkinter ──────────────────────────────────────────
-if ! "$PYTHON" -c "import tkinter" 2>/dev/null; then
-    echo "❌ tkinter not found."
-    echo "   Install: brew install python-tk"
-    echo "   Or use Python from https://python.org"
-    exit 1
-fi
-echo "→ tkinter: ✓"
-
 # ── Create venv ────────────────────────────────────────────
 echo ""
 echo "→ Creating virtual environment..."
@@ -58,7 +49,7 @@ VENV_PYTHON="$VENV_DIR/bin/python"
 # ── Install dependencies ───────────────────────────────────
 echo "→ Installing dependencies..."
 "$VENV_PYTHON" -m pip install --upgrade pip setuptools wheel 2>&1 | tail -1
-"$VENV_PYTHON" -m pip install py2app rumps matplotlib 2>&1 | tail -3
+"$VENV_PYTHON" -m pip install py2app rumps 2>&1 | tail -3
 
 # ── Clean previous builds ──────────────────────────────────
 rm -rf build dist
