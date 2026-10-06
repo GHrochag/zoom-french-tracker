@@ -138,16 +138,16 @@ class CalendarView(NSView):
         self._sessions = []
         return self
 
-    def refresh(self):
+    def reload_data(self):
         """Reload data and redraw."""
         self._daily = db.get_daily_hours(self._year, self._month)
         self._sessions = db.get_month_sessions(self._year, self._month)
         self.setNeedsDisplay_(True)
 
-    def navigate(self, year, month):
+    def go_month(self, year, month):
         self._year = year
         self._month = month
-        self.refresh()
+        self.reload_data()
 
     def mouseDown_(self, event):
         """Handle clicks — navigation buttons or day cells."""
@@ -200,12 +200,12 @@ class CalendarView(NSView):
     def _go_prev(self):
         m = self._month - 1 if self._month > 1 else 12
         y = self._year if self._month > 1 else self._year - 1
-        self.navigate(y, m)
+        self.go_month(y, m)
 
     def _go_next(self):
         m = self._month + 1 if self._month < 12 else 1
         y = self._year if self._month < 12 else self._year + 1
-        self.navigate(y, m)
+        self.go_month(y, m)
 
     def _total_height(self):
         rows = len(calendar.Calendar(firstweekday=0).monthdayscalendar(self._year, self._month))
@@ -416,6 +416,7 @@ class CalendarWindow:
         self.win.setLevel_(NSFloatingWindowLevel)
         self.win.setCollectionBehavior_(1 | 4)  # canJoinAllSpaces | stationary
         self.win.setReleasedWhenClosed_(False)
+        self.win.setBackgroundColor_(NSColor.colorWithRed_green_blue_alpha_(*CLR_BG))
         self.win.center()
 
         # Scroll view for the calendar
@@ -425,9 +426,11 @@ class CalendarWindow:
         self.scroll.setHasVerticalScroller_(True)
         self.scroll.setAutohidesScrollers_(True)
         self.scroll.setBorderType_(0)  # NSNoBorder
+        self.scroll.setDrawsBackground_(False)
+        self.scroll.setBackgroundColor_(NSColor.colorWithRed_green_blue_alpha_(*CLR_BG))
 
         self.view = CalendarView.alloc().initWithApp_(app)
-        self.view.refresh()
+        self.view.reload_data()
         total_h = self.view._total_height()
         self.view.setFrame_(NSMakeRect(0, 0, 420, max(total_h, 580)))
         self.scroll.setDocumentView_(self.view)
@@ -629,7 +632,7 @@ class ZoomFrenchTracker(rumps.App):
 
         try:
             self.calendar_window = CalendarWindow(self)
-            self.calendar_window.view.refresh()
+            self.calendar_window.view.reload_data()
             self.calendar_window.win.makeKeyAndOrderFront_(None)
         except Exception as e:
             self.calendar_window = None
@@ -638,7 +641,7 @@ class ZoomFrenchTracker(rumps.App):
     def _refresh_calendar(self):
         if self.calendar_window is not None:
             try:
-                self.calendar_window.view.refresh()
+                self.calendar_window.view.reload_data()
             except Exception:
                 pass
 
