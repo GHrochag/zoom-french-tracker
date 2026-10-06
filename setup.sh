@@ -1,40 +1,38 @@
 #!/usr/bin/env bash
 #
-# Zoom French Tracker — One-command setup for macOS.
-# Builds the app and installs it to ~/Applications.
+# Zoom French Tracker — One-command setup.
+#   bash setup.sh  →  builds .app + installs to ~/Applications + auto-start
 #
-# Usage:  bash setup.sh
-
 set -euo pipefail
 
-APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$APP_DIR"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+APP_NAME="Zoom French Tracker"
 
-echo "══════════════════════════════════════════"
+echo "══════════════════════════════════════════════"
 echo "  🇫🇷  Zoom French Tracker — Setup"
-echo "══════════════════════════════════════════"
-echo ""
+echo "══════════════════════════════════════════════"
+
+# Stop any running instance
+pkill -f "Zoom French Tracker" 2>/dev/null || true
+sleep 1
 
 # Build the .app
-bash "$APP_DIR/build_app.sh"
+bash "$SCRIPT_DIR/build_app.sh"
 
 # Install to ~/Applications
 echo ""
 echo "→ Installing to ~/Applications..."
 mkdir -p ~/Applications
-rm -rf ~/Applications/Zoom\ French\ Tracker.app
-cp -R "$APP_DIR/dist/Zoom French Tracker.app" ~/Applications/
+rm -rf ~/Applications/"$APP_NAME.app"
+cp -R "$SCRIPT_DIR/dist/$APP_NAME.app" ~/Applications/
 
-# Create LaunchAgent for auto-start on login
-echo "→ Setting auto-start on login..."
-LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
-PLIST="$LAUNCH_AGENTS/com.nous.zoomfrenchtracker.plist"
-mkdir -p "$LAUNCH_AGENTS"
+# ── LaunchAgent for auto-start ──────────────────────────
+PLIST="$HOME/Library/LaunchAgents/com.nous.zoomfrenchtracker.plist"
+mkdir -p "$HOME/Library/LaunchAgents"
 
 cat > "$PLIST" << PLIST
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
@@ -48,26 +46,21 @@ cat > "$PLIST" << PLIST
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
-    <false/>
+    <true/>
 </dict>
 </plist>
 PLIST
 
+# Load the LaunchAgent
 launchctl unload "$PLIST" 2>/dev/null || true
-launchctl load "$PLIST"
-
-# Launch now
-open ~/Applications/Zoom\ French\ Tracker.app
+launchctl load "$PLIST" 2>/dev/null || true
 
 echo ""
-echo "══════════════════════════════════════════"
-echo "  ✅ Done! Look for 🇫🇷 in your menu bar."
+echo "══════════════════════════════════════════════"
+echo "  ✅  Instalado en ~/Applications/"
+echo "  🔄  Se abre solo al iniciar tu Mac"
 echo ""
-echo "  💡 First steps:"
-echo "     1. Click 🇫🇷 → Agregar horas…"
-echo "     2. Input your purchased hours"
-echo "     3. Open Zoom — tracking is automatic!"
-echo ""
-echo "  🔄 The app auto-starts on login."
-echo "  🗑  To uninstall: delete from ~/Applications/"
-echo "══════════════════════════════════════════"
+echo "  🚀  Abriendo ahora..."
+echo "══════════════════════════════════════════════"
+
+open ~/Applications/"$APP_NAME.app"

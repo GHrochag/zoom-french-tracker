@@ -1,24 +1,35 @@
 #!/usr/bin/env python3
 """
 Zoom French Tracker — Menu bar app for macOS.
-Tracks Zoom meetings via CptHost process detection.
-Calendar: native NSTextView with NSAttributedString — no WebKit, no CSS.
+Detects Zoom meetings via CptHost process, deducts from hour balance.
+Calendar: native WebKit window with dark theme.
 """
 
-import subprocess, sys, os, calendar
+import subprocess, sys, os, json, calendar
 from datetime import datetime
 from pathlib import Path
 
 import rumps
+import objc
+from Foundation import (
+    NSBundle, NSURL, NSURLRequest,
+)
+from AppKit import (
+    NSWindow, NSBackingStoreBuffered, NSFloatingWindowLevel, NSColor,
+)
+from WebKit import (
+    WKWebView, WKWebViewConfiguration,
+    WKUserContentController, WKScriptMessage,
+)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import db
 from session_tracker import compute_duration, format_balance
 
 
-# ═══════════════════════════════════════════════════════════════
-#  ZOOM MEETING DETECTION
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
+#  MEETING DETECTION
+# ═══════════════════════════════════════════════════
 
 def is_in_meeting():
     try:
@@ -33,50 +44,60 @@ def is_in_meeting():
     return False
 
 
-# ═══════════════════════════════════════════════════════════════
-#  CALENDAR WINDOW (Pure AppKit — NSTextView + NSAttributedString)
-# ═══════════════════════════════════════════════════════════════
-
-from Foundation import (
-    NSAttributedString, NSMutableAttributedString,
-    NSFontAttributeName, NSForegroundColorAttributeName,
-    NSMakeRange,
-)
-from AppKit import (
-    NSWindow, NSBackingStoreBuffered, NSFloatingWindowLevel,
-    NSScrollView, NSTextView, NSFont, NSColor,
-)
+# ═══════════════════════════════════════════════════
+#  HTML CALENDAR
+# ═══════════════════════════════════════════════════
 
 MESES = ["","Enero","Febrero","Marzo","Abril","Mayo","Junio",
          "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"]
-DIAS = ["Lu","Ma","Mi","Ju","Vi","Sá","Do"]
+DIAS_SEMANA = ["Lu","Ma","Mi","Ju","Vi","Sá","Do"]
 
-# Colors
-CLR_BG    = NSColor.colorWithRed_green_blue_alpha_(0.118,0.118,0.180,1.0)
-CLR_TEXT  = NSColor.colorWithRed_green_blue_alpha_(0.804,0.835,0.957,1.0)  # #cdd6f4
-CLR_BLUE  = NSColor.colorWithRed_green_blue_alpha_(0.537,0.706,0.980,1.0)  # #89b4fa
-CLR_GREEN = NSColor.colorWithRed_green_blue_alpha_(0.651,0.890,0.631,1.0)  # #a6e3a1
-CLR_YELLOW= NSColor.colorWithRed_green_blue_alpha_(0.976,0.886,0.686,1.0)  # #f9e2af
-CLR_DIM   = NSColor.colorWithRed_green_blue_alpha_(0.651,0.678,0.784,1.0)  # #a6adc8
-CLR_RED   = NSColor.colorWithRed_green_blue_alpha_(0.953,0.545,0.659,1.0)  # #f38ba8
+CSS = r"""
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,Helvetica,sans-serif;background:#1e1e2e;color:#cdd6f4;padding:16px;-webkit-user-select:none}
+.balance-row{display:flex;gap:10px;margin-bottom:16px}
+.balance-row .card{flex:1;background:#313244;border-radius:10px;padding:14px 12px;text-align:center}
+.balance-row .card .lbl{font-size:11px;color:#a6adc8;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+.balance-row .card .val{font-size:26px;font-weight:700}
+.month-nav{display:flex;align-items:center;justify-content:center;gap:16px;margin-bottom:16px}
+.month-nav .title{font-size:18px;font-weight:700;min-width:160px;text-align:center}
+.month-nav button{background:#45475a;border:none;color:#89b4fa;font-size:15px;padding:6px 16px;border-radius:8px;cursor:pointer}
+.month-nav button:hover{background:#585b70}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;text-align:center;margin-bottom:16px}
+.cal-grid .dh{font-size:11px;color:#89b4fa;padding:6px 0;font-weight:600}
+.cal-grid .day{aspect-ratio:1;display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;min-height:44px}
+.cal-grid .day.off{background:transparent;cursor:default}
+.cal-grid .day.normal{color:#cdd6f4;background:#252536}
+.cal-grid .day.normal:hover{background:#353550}
+.cal-grid .day.today{outline:2px solid #f9e2af;outline-offset:-2px}
+.cal-grid .day.lv1{background:#1a3a2a;color:#a6e3a1}
+.cal-grid .day.lv2{background:#1a3a3a;color:#94e2d5}
+.cal-grid .day.lv3{background:#1a2a4a;color:#89dceb}
+.cal-grid .day.lv4{background:#2a1a4a;color:#b4befe}
+.cal-grid .day .hrs{font-size:9px;line-height:1;opacity:.85}
+.usage-line{text-align:center;font-size:11px;color:#a6adc8;margin-bottom:16px}
+.sec-title{font-size:14px;font-weight:700;color:#89b4fa;margin-bottom:8px}
+.hist-table{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:12px}
+.hist-table th{color:#a6adc8;text-align:left;padding:5px 8px;font-weight:500;border-bottom:1px solid #313244}
+.hist-table td{padding:5px 8px}
+.hist-table tr:nth-child(even){background:#1a1a2e}
+.day-detail{margin-top:12px;padding:12px;background:#252536;border-radius:10px;display:none}
+.day-detail.show{display:block}
+.day-detail .dd-title{font-size:13px;font-weight:700;color:#89b4fa;margin-bottom:8px}
+.day-detail .dd-row{font-size:12px;padding:3px 0;color:#cdd6f4}
+.empty-msg{text-align:center;color:#585b70;font-size:11px;padding:12px}
+"""
 
 
-def make_attr(text, color=CLR_TEXT, bold=False, size=13, mono=False):
-    fnt = NSFont.monospacedSystemFontOfSize_weight_(size, 0.0) if mono else \
-          NSFont.systemFontOfSize_weight_(size, 0.6 if bold else 0.0)
-    return NSAttributedString.alloc().initWithString_attributes_(text, {
-        NSFontAttributeName: fnt,
-        NSForegroundColorAttributeName: color,
-    })
+def _day_level(hours):
+    if hours >= 2.0: return 4
+    if hours >= 1.5: return 3
+    if hours >= 1.0: return 2
+    if hours >= 0.5: return 1
+    return 0
 
 
-def build_calendar_text(year, month):
-    """Build NSAttributedString for the calendar view."""
-    result = NSMutableAttributedString.alloc().init()
-
-    def add(text, color=CLR_TEXT, bold=False, size=13, mono=False):
-        result.appendAttributedString_(make_attr(text, color, bold, size, mono))
-
+def build_html(year, month):
     balance = db.get_balance()
     purchased = db.get_total_credits()
     consumed = db.get_total_consumed()
@@ -84,139 +105,156 @@ def build_calendar_text(year, month):
     sessions = db.get_month_sessions(year, month)
     month_used = sum(daily.values())
 
-    # ── Balance cards ──
-    bal_clr = CLR_GREEN if balance > 5 else (CLR_YELLOW if balance > 1 else CLR_RED)
-    add(f"Saldo: {format_balance(balance)}    ", bal_clr, True, 14)
-    add(f"Comprado: {format_balance(purchased)}    ", CLR_BLUE, False, 12)
-    add(f"Usado: {format_balance(consumed)}\n\n", CLR_DIM, False, 12)
+    bal_clr = "#a6e3a1" if balance > 5 else ("#f9e2af" if balance > 1 else "#f38ba8")
 
-    # ── Month header ──
-    cal_months = calendar.TextCalendar(firstweekday=0)
-    add(f"◀  {MESES[month]} {year}  ▶\n\n", CLR_BLUE, True, 16)
-
-    # ── Day headers ──
-    header_line = "  ".join(f"{d:>3}" for d in DIAS) + "\n"
-    add(header_line, CLR_BLUE, True, 11, mono=True)
-
-    # ── Calendar grid ──
-    weeks = cal_months.monthdayscalendar(year, month)
+    cal = calendar.Calendar(firstweekday=0)
+    weeks = cal.monthdayscalendar(year, month)
     today = datetime.now()
-    today_day = today.day if (today.year == year and today.month == month) else None
+    is_cur = (today.year == year and today.month == month)
+    today_day = today.day if is_cur else None
 
+    cells = ""
+    for d in DIAS_SEMANA:
+        cells += f'<div class="dh">{d}</div>'
     for week in weeks:
-        cells = []
         for day in week:
             if day == 0:
-                cells.append("  · ")
-            else:
-                s = f"{day:3d}"
-                cells.append(s)
-
-        line = "  ".join(cells) + "\n"
-        add(line, CLR_TEXT, False, 11, mono=True)
-
-        # Day annotations (hours)
-        anno_parts = []
-        for day in week:
-            if day == 0:
-                anno_parts.append("    ")
+                cells += '<div class="day off"></div>'
             else:
                 h = daily.get(day, 0)
-                if h > 0:
-                    s = f"{format_balance(h):>3}"
-                elif day == today_day:
-                    s = "  · "
-                else:
-                    s = "    "
-                anno_parts.append(s)
+                lvl = _day_level(h)
+                cls = f"lv{lvl}" if lvl > 0 else "normal"
+                if day == today_day:
+                    cls += " today"
+                hrs_html = f'<div class="hrs">{format_balance(h)}</div>' if h > 0 else ""
+                cells += f'<div class="day {cls}" onclick="pickDay({year},{month},{day})">{day}{hrs_html}</div>'
 
-        if any("h" in p for p in anno_parts) or today_day in week:
-            anno = "  ".join(anno_parts) + "\n"
-            add(anno, CLR_GREEN, False, 9, mono=True)
+    sessions_json = []
+    for s in sessions:
+        sd = datetime.strptime(s["start_time"], "%Y-%m-%d %H:%M:%S")
+        ed = datetime.strptime(s["end_time"], "%Y-%m-%d %H:%M:%S") if s["end_time"] else None
+        sessions_json.append({
+            "day": sd.day,
+            "start": sd.strftime("%H:%M"),
+            "end": ed.strftime("%H:%M") if ed else "--",
+            "hours": format_balance(s["rounded_hours"]),
+        })
 
-    add(f"\nEste mes: {format_balance(month_used)}\n\n", CLR_DIM, False, 10)
-
-    # ── History ──
-    add("▸ Historial\n\n", CLR_BLUE, True, 13)
-
+    hist_rows = ""
     if sessions:
         for s in sessions:
             sd = datetime.strptime(s["start_time"], "%Y-%m-%d %H:%M:%S")
-            ed_str = s["end_time"]
-            ed = datetime.strptime(ed_str, "%Y-%m-%d %H:%M:%S") if ed_str else None
-            line = f"  {sd.day:02d}/{sd.month:02d}  {sd:%H:%M}-{ed:%H:%M if ed else '--'}  {format_balance(s['rounded_hours']):>5}\n"
-            add(line, CLR_TEXT, False, 11, mono=True)
+            ed = datetime.strptime(s["end_time"], "%Y-%m-%d %H:%M:%S") if s["end_time"] else None
+            hist_rows += f'<tr><td>{sd.day:02d} {MESES[sd.month][:3]}</td><td>{sd:%H:%M}</td><td>{ed:%H:%M if ed else "--"}</td><td>{format_balance(s["rounded_hours"])}</td></tr>'
     else:
-        add("  Sin sesiones este mes\n", CLR_DIM, False, 11)
+        hist_rows = '<tr><td colspan="4" class="empty-msg">Sin sesiones este mes</td></tr>'
 
-    return result
+    return f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>{CSS}</style></head><body>
 
+<div class="balance-row">
+  <div class="card"><div class="lbl">Saldo</div><div class="val" style="color:{bal_clr}">{format_balance(balance)}</div></div>
+  <div class="card"><div class="lbl">Comprado</div><div class="val" style="color:#89b4fa">{format_balance(purchased)}</div></div>
+  <div class="card"><div class="lbl">Usado</div><div class="val" style="color:#fab387">{format_balance(consumed)}</div></div>
+</div>
+
+<div class="month-nav">
+  <button onclick="goMonth({year},{month-1 if month>1 else 12},{year if month>1 else year-1})">◀</button>
+  <div class="title">{MESES[month]} {year}</div>
+  <button onclick="goMonth({year},{month+1 if month<12 else 1},{year if month<12 else year+1})">▶</button>
+</div>
+
+<div class="cal-grid">{cells}</div>
+<div class="usage-line">Este mes: {format_balance(month_used)}</div>
+
+<div class="day-detail" id="dayDetail">
+  <div class="dd-title" id="ddTitle"></div>
+  <div id="ddContent"></div>
+</div>
+
+<div class="sec-title">📋 Historial</div>
+<table class="hist-table"><thead><tr><th>Fecha</th><th>Inicio</th><th>Fin</th><th>Horas</th></tr></thead><tbody>{hist_rows}</tbody></table>
+
+<script>
+var SESSIONS={json.dumps(sessions_json)};
+var M={json.dumps(MESES)};
+function goMonth(y,m,_y){{window.webkit.messageHandlers.nav.postMessage({{y:y,m:m}})}}
+function pickDay(y,m,d){{
+ var el=document.getElementById("dayDetail");
+ var ti=document.getElementById("ddTitle");
+ var co=document.getElementById("ddContent");
+ ti.textContent=d+" de "+M[m]+" "+y;
+ var ss=SESSIONS.filter(function(s){{return s.day===d}});
+ if(!ss.length){{co.innerHTML='<div class="empty-msg">Sin sesiones este día</div>'}}
+ else{{co.innerHTML=ss.map(function(s){{return '<div class="dd-row">🕐 '+s.start+" → "+s.end+" &nbsp;&nbsp; "+s.hours+'</div>'}}).join("")}}
+ el.classList.add("show")
+}}
+</script>
+</body></html>"""
+
+
+# ═══════════════════════════════════════════════════
+#  CALENDAR WINDOW
+# ═══════════════════════════════════════════════════
 
 class CalendarWindow:
     def __init__(self, app):
         self._app = app
-        self._year = datetime.now().year
-        self._month = datetime.now().month
 
-        mask = 1 | 2 | 8
+        # Message handler
+        NavHandler = type('NavHandler', (objc.lookUpClass('NSObject'),), {})
+
+        def init_self(inner_self):
+            inner_self = objc.super(NavHandler, inner_self).init()
+            inner_self._app = app
+            return inner_self
+        NavHandler.init = init_self
+
+        @objc.signature(b'v@:@@')
+        def handle_msg(inner_self, controller, message):
+            try:
+                body = message.body()
+                app._load_html(int(body.get("y",0)), int(body.get("m",0)))
+            except: pass
+        NavHandler.userContentController_didReceiveScriptMessage_ = handle_msg
+
+        handler = NavHandler.alloc().init()
+
+        config = WKWebViewConfiguration.alloc().init()
+        ctrl = WKUserContentController.alloc().init()
+        ctrl.addScriptMessageHandler_name_(handler, "nav")
+        config.setUserContentController_(ctrl)
+
+        mask = 1 | 2 | 8  # titled | closable | resizable
         self.win = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-            ((0,0),(440,560)), mask, NSBackingStoreBuffered, False
+            ((0,0),(440,620)), mask, NSBackingStoreBuffered, False
         )
-        self.win.setTitle_("🇫🇷 Zoom French Tracker")
+        self.win.setTitle_("🇫🇷  Calendario")
         self.win.setLevel_(NSFloatingWindowLevel)
-        self.win.setBackgroundColor_(CLR_BG)
+        self.win.setBackgroundColor_(NSColor.colorWithRed_green_blue_alpha_(0.118,0.118,0.180,1.0))
+        self.win.setOpaque_(True)
         self.win.setReleasedWhenClosed_(False)
         self.win.center()
 
-        cv = self.win.contentView()
+        rect = self.win.contentView().bounds()
+        self._webview = WKWebView.alloc().initWithFrame_configuration_(rect, config)
+        self._webview.setValue_forKey_(False, "drawsBackground")
+        self._webview.setAutoresizingMask_(18)
+        self.win.contentView().addSubview_(self._webview)
 
-        # ScrollView + TextView
-        scr = NSScrollView.alloc().initWithFrame_(cv.bounds())
-        scr.setHasVerticalScroller_(True)
-        scr.setAutohidesScrollers_(True)
-        scr.setBorderType_(0)
-        scr.setDrawsBackground_(False)
-        scr.setBackgroundColor_(CLR_BG)
-        scr.setAutoresizingMask_(18)
+        self._load_html(datetime.now().year, datetime.now().month)
 
-        self.tv = NSTextView.alloc().initWithFrame_(scr.contentView().bounds())
-        self.tv.setEditable_(False)
-        self.tv.setSelectable_(True)
-        self.tv.setBackgroundColor_(CLR_BG)
-        self.tv.setMinSize_((400, 200))
-        self.tv.setMaxSize_((1000, 10000))
-        self.tv.setVerticallyResizable_(True)
-        self.tv.setHorizontallyResizable_(False)
-
-        scr.setDocumentView_(self.tv)
-        cv.addSubview_(scr)
-
-        self._load()
-
-    def _load(self):
-        self.tv.textStorage().setAttributedString_(
-            build_calendar_text(self._year, self._month)
-        )
-
-    def go_prev(self):
-        m, y = self._month - 1, self._year
-        if m < 1:
-            m, y = 12, y - 1
-        if y >= 2020:
-            self._month, self._year = m, y
-            self._load()
-
-    def go_next(self):
-        m, y = self._month + 1, self._year
-        if m > 12:
-            m, y = 1, y + 1
-        self._month, self._year = m, y
-        self._load()
+    def _load_html(self, year, month):
+        try:
+            html = build_html(year, month)
+            self._webview.loadHTMLString_baseURL_(html, None)
+        except: pass
 
 
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 #  MAIN APP
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 
 class ZoomFrenchTracker(rumps.App):
     def __init__(self):
@@ -243,40 +281,38 @@ class ZoomFrenchTracker(rumps.App):
         self.menu.update([
             rumps.MenuItem("➕ Agregar horas…", callback=self._add_hours),
             rumps.MenuItem("📅 Calendario", callback=self._show_cal),
-            rumps.MenuItem("◀ Mes anterior", callback=self._prev),
-            rumps.MenuItem("▶ Mes siguiente", callback=self._next),
             None,
             rumps.MenuItem("❌ Salir", callback=self._quit),
         ])
 
     def _tick(self, _):
         try:
-            zoom_now = is_in_meeting()
-            if zoom_now and not self.in_meeting:
+            m = is_in_meeting()
+            if m and not self.in_meeting:
                 self._started()
-            elif not zoom_now and self.in_meeting:
+            elif not m and self.in_meeting:
                 self._stopped()
-            self.in_meeting = zoom_now
+            self.in_meeting = m
             self._update_display()
         except: pass
 
     def _started(self):
-        active = db.get_active_session()
-        if active: db.cancel_session(active["id"])
+        a = db.get_active_session()
+        if a: db.cancel_session(a["id"])
         self.active_session_id = db.start_session(datetime.now())
 
     def _stopped(self):
         if not self.active_session_id: return
-        active = db.get_active_session()
-        if not active or active["id"] != self.active_session_id:
+        a = db.get_active_session()
+        if not a or a["id"] != self.active_session_id:
             self.active_session_id = None; return
         end = datetime.now()
-        start = datetime.strptime(active["start_time"], "%Y-%m-%d %H:%M:%S")
+        start = datetime.strptime(a["start_time"], "%Y-%m-%d %H:%M:%S")
         mins, rounded = compute_duration(start, end)
         if rounded == 0:
-            db.cancel_session(active["id"])
+            db.cancel_session(a["id"])
         else:
-            db.end_session(active["id"], end, mins, rounded)
+            db.end_session(a["id"], end, mins, rounded)
             self._check_alerts()
         self.active_session_id = None
         self._update_display()
@@ -293,7 +329,7 @@ class ZoomFrenchTracker(rumps.App):
             rumps.notification("⚠️ Queda 1 hora", "", "Compra más horas.")
             self._alert_1h = self._alert_2h = True
         elif b <= 2.0 and not self._alert_2h:
-            rumps.notification("⚠️ Quedan 2 horas", "", "Compra más horas pronto.")
+            rumps.notification("⚠️ Quedan 2 horas", "", "Compra más horas.")
             self._alert_2h = True
 
     def _add_hours(self, _):
@@ -327,22 +363,21 @@ class ZoomFrenchTracker(rumps.App):
             self.cal_win = None
             rumps.alert("Error", str(e))
 
-    def _prev(self, _):
+    def _load_html(self, year, month):
         if self.cal_win:
-            self.cal_win.go_prev()
-
-    def _next(self, _):
-        if self.cal_win:
-            self.cal_win.go_next()
+            try: self.cal_win._load_html(year, month)
+            except: pass
 
     def _refresh_cal(self):
         if self.cal_win:
-            self.cal_win._load()
+            try:
+                now = datetime.now()
+                self._load_html(now.year, now.month)
+            except: pass
 
     def _quit(self, _):
         try:
-            if self.cal_win:
-                self.cal_win.win.close()
+            if self.cal_win: self.cal_win.win.close()
         except: pass
         rumps.quit_application()
 

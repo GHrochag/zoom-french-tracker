@@ -1,81 +1,87 @@
 #!/usr/bin/env bash
 #
-# Build Zoom French Tracker as a standalone macOS .app bundle.
-# Output: dist/Zoom French Tracker.app
+# Build Zoom French Tracker .app — NO py2app.
+# Creates a lightweight macOS .app that launches via shell script.
+# Venv stays on disk — all PyObjC features work natively.
 #
-# Prerequisites: Python 3.9+
-#   Uses pure AppKit — no tkinter, no WebKit
-#
-# Usage:  bash build_app.sh
-
 set -euo pipefail
 
-APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$APP_DIR"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+APP_NAME="Zoom French Tracker"
+VENV_DIR="$SCRIPT_DIR/.venv"
+APP_DIR="$SCRIPT_DIR/dist/$APP_NAME.app"
 
-echo "══════════════════════════════════════════"
-echo "  🇫🇷  Building Zoom French Tracker.app"
-echo "══════════════════════════════════════════"
+echo "══════════════════════════════════════════════"
+echo "  🔨 Building $APP_NAME"
+echo "══════════════════════════════════════════════"
 
-# ── Find Python ────────────────────────────────────────────
-PYTHON=""
-for py in python3 python; do
-    if command -v "$py" &>/dev/null; then
-        ver=$("$py" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
-        major=$(echo "$ver" | cut -d. -f1)
-        minor=$(echo "$ver" | cut -d. -f2)
-        if [ "$major" -ge 3 ] && [ "$minor" -ge 9 ]; then
-            PYTHON="$py"
-            break
-        fi
-    fi
-done
-
-if [ -z "$PYTHON" ]; then
-    echo "❌ Python 3.9+ required."
-    exit 1
-fi
+# ── Venv ────────────────────────────────────────────
+PYTHON="${PYTHON:-python3}"
 echo "→ Python: $($PYTHON --version)"
 
-# ── Create venv ────────────────────────────────────────────
-echo ""
-echo "→ Creating virtual environment..."
-VENV_DIR="$APP_DIR/.build_venv"
-rm -rf "$VENV_DIR"
-"$PYTHON" -m venv "$VENV_DIR"
-VENV_PYTHON="$VENV_DIR/bin/python"
-
-# ── Install dependencies ───────────────────────────────────
-echo "→ Installing dependencies..."
-"$VENV_PYTHON" -m pip install --upgrade pip setuptools wheel 2>&1 | tail -1
-"$VENV_PYTHON" -m pip install py2app rumps 2>&1 | tail -3
-
-# ── Clean previous builds ──────────────────────────────────
-rm -rf build dist
-
-# ── Build the .app ─────────────────────────────────────────
-echo ""
-echo "→ Building .app bundle (this takes ~1 minute)..."
-"$VENV_PYTHON" setup.py py2app 2>&1 | grep -v "^creating\|^copying\|^byte-compiling"
-
-# ── Verify output ──────────────────────────────────────────
-APP_PATH="$APP_DIR/dist/Zoom French Tracker.app"
-if [ -d "$APP_PATH" ]; then
-    SIZE=$(du -sh "$APP_PATH" | cut -f1)
-    echo ""
-    echo "══════════════════════════════════════════"
-    echo "  ✅ Build complete!"
-    echo ""
-    echo "  📦 $APP_PATH"
-    echo "  📏 Size: $SIZE"
-    echo ""
-    echo "  💡 To install:"
-    echo "     cp -r \"$APP_PATH\" ~/Applications/"
-    echo ""
-    echo "  🚀 Then double-click 'Zoom French Tracker'."
-    echo "     The 🇫🇷 icon will appear in your menu bar."
-    echo "══════════════════════════════════════════"
-else
-    echo "❌ Build failed — .app not found."
-    exit 1
+if [ ! -d "$VENV_DIR" ]; then
+    echo "→ Creating virtual environment..."
+    "$PYTHON" -m venv "$VENV_DIR"
 fi
+VENV_PYTHON="$VENV_DIR/bin/python3"
+
+echo "→ Installing dependencies..."
+"$VENV_PYTHON" -m pip install --upgrade pip -q 2>&1 | tail -1
+"$VENV_PYTHON" -m pip install rumps -q 2>&1 | tail -1
+
+# ── Build .app ──────────────────────────────────────
+echo "→ Building .app..."
+rm -rf "$APP_DIR"
+mkdir -p "$APP_DIR/Contents/MacOS"
+mkdir -p "$APP_DIR/Contents/Resources"
+
+# Launcher script
+cat > "$APP_DIR/Contents/MacOS/$APP_NAME" << 'LAUNCHER'
+#!/bin/bash
+APP_DIR="$(cd "$(dirname "$0")/../../.." && pwd)"
+export PATH="$APP_DIR/.venv/bin:$PATH"
+exec "$APP_DIR/.venv/bin/python3" "$APP_DIR/zoom_tracker.py"
+LAUNCHER
+chmod +x "$APP_DIR/Contents/MacOS/$APP_NAME"
+
+# Info.plist
+cat > "$APP_DIR/Contents/Info.plist" << PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>Zoom French Tracker</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.nous.zoomfrenchtracker</string>
+    <key>CFBundleName</key>
+    <string>Zoom French Tracker</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleVersion</key>
+    <string>1.0</string>
+    <key>LSUIElement</key>
+    <true/>
+</dict>
+</plist>
+PLIST
+
+# Copy icon placeholder
+if [ -f "$SCRIPT_DIR/icon.icns" ]; then
+    cp "$SCRIPT_DIR/icon.icns" "$APP_DIR/Contents/Resources/"
+fi
+
+# ── Done ────────────────────────────────────────────
+SIZE=$(du -sh "$APP_DIR" | cut -f1)
+echo ""
+echo "══════════════════════════════════════════════"
+echo "  ✅ Build complete!"
+echo ""
+echo "  📦 $APP_DIR"
+echo "  📏 Size: $SIZE"
+echo ""
+echo "  💡 Install:"
+echo "     cp -r '$APP_DIR' ~/Applications/"
+echo ""
+echo "  🚀 Then double-click in Finder."
+echo "══════════════════════════════════════════════"
