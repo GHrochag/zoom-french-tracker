@@ -49,7 +49,7 @@ VENV_PYTHON="$VENV_DIR/bin/python"
 # ── Install dependencies ───────────────────────────────────
 echo "→ Installing dependencies..."
 "$VENV_PYTHON" -m pip install --upgrade pip setuptools wheel 2>&1 | tail -1
-"$VENV_PYTHON" -m pip install py2app rumps 2>&1 | tail -3
+"$VENV_PYTHON" -m pip install py2app rumps "pyobjc-framework-WebKit" 2>&1 | tail -3
 
 # ── Clean previous builds ──────────────────────────────────
 rm -rf build dist

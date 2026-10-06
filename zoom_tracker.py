@@ -59,7 +59,7 @@ DIAS_SEMANA = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
 
 CSS = """
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,Helvetica,sans-serif;background:#1e1e2e;color:#cdd6f4;padding:16px;-webkit-user-select:none;user-select:none}
+body{font-family:-apple-system,Helvetica,sans-serif;background:#1e1e2e;color:#cdd6f4;padding:14px}
 .balance-row{display:flex;gap:10px;margin-bottom:14px}
 .balance-row .card{flex:1;background:#313244;border-radius:10px;padding:12px 10px;text-align:center}
 .balance-row .card .lbl{font-size:10px;color:#a6adc8;text-transform:uppercase;letter-spacing:.5px}
@@ -68,28 +68,28 @@ body{font-family:-apple-system,Helvetica,sans-serif;background:#1e1e2e;color:#cd
 .month-head .ttl{font-size:16px;font-weight:700;min-width:140px;text-align:center}
 .month-head button{background:#45475a;border:none;color:#89b4fa;font-size:14px;padding:5px 14px;border-radius:6px;cursor:pointer}
 .month-head button:hover{background:#585b70}
-.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;text-align:center;margin-bottom:14px}
-.cal .dh{font-size:10px;color:#89b4fa;padding:4px 0;font-weight:600}
-.cal .day{aspect-ratio:1;display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:8px;font-size:13px;font-weight:600}
+.cal{display:flex;flex-wrap:wrap;gap:2px;margin-bottom:14px}
+.cal .dh{font-size:10px;color:#89b4fa;padding:4px 0;font-weight:600;width:44px;text-align:center}
+.cal .day{width:44px;height:44px;display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:8px;font-size:13px;font-weight:600;overflow:hidden}
 .cal .day.off{background:transparent}
-.cal .day.cm{color:#cdd6f4;cursor:pointer;background:#181825}
-.cal .day.cm:hover{filter:brightness(1.3)}
+.cal .day.cm{color:#cdd6f4;cursor:pointer;background:#2a2a3e}
+.cal .day.cm:hover{background:#3a3a52}
 .cal .day.td{outline:2px solid #f9e2af;outline-offset:-2px}
 .cal .day.lv1{background:#1a3a2a;color:#a6e3a1}
 .cal .day.lv2{background:#1a3a3a;color:#94e2d5}
 .cal .day.lv3{background:#1a2a4a;color:#89dceb}
 .cal .day.lv4{background:#2a1a4a;color:#b4befe}
-.cal .day .sm{font-size:8px;margin-top:-2px;opacity:.8}
+.cal .day .sm{font-size:8px;margin-top:-2px;opacity:.9}
 .hist-title{font-size:13px;font-weight:700;color:#89b4fa;margin-bottom:6px}
 .hist-table{width:100%;border-collapse:collapse;font-size:11px}
 .hist-table th{color:#a6adc8;text-align:left;padding:4px 6px;font-weight:500;border-bottom:1px solid #313244}
 .hist-table td{padding:4px 6px}
-.hist-table tr:nth-child(even){background:#181825}
-.day-detail{margin-top:12px;padding:10px;background:#313244;border-radius:8px;display:none}
+.hist-table tr:nth-child(even){background:#1e1e30}
+.day-detail{margin-top:12px;padding:10px;background:#2a2a3e;border-radius:8px;display:none}
 .day-detail.visible{display:block}
 .day-detail .dd-title{font-size:12px;font-weight:700;color:#89b4fa;margin-bottom:6px}
 .day-detail .dd-row{font-size:11px;padding:2px 0;color:#cdd6f4}
-.empty{text-align:center;color:#585b70;font-size:10px;padding:10px}
+.empty{text-align:center;color:#6c7086;font-size:10px;padding:10px}
 .month-usage{text-align:center;font-size:10px;color:#a6adc8;margin-top:10px}
 """
 
@@ -213,7 +213,7 @@ class CalendarWindow:
         import objc
         from Foundation import NSURL, NSURLRequest
         from AppKit import (
-            NSWindow, NSBackingStoreBuffered, NSFloatingWindowLevel,
+            NSWindow, NSBackingStoreBuffered, NSFloatingWindowLevel, NSColor,
         )
 
         try:
@@ -267,10 +267,12 @@ class CalendarWindow:
         self.win.setTitle_("🇫🇷 Zoom French Tracker")
         self.win.setLevel_(NSFloatingWindowLevel)
         self.win.setReleasedWhenClosed_(False)
+        self.win.setBackgroundColor_(NSColor.colorWithRed_green_blue_alpha_(0.118, 0.118, 0.180, 1.0))
         self.win.center()
 
         rect = self.win.contentView().bounds()
         self._webview = WKWebView.alloc().initWithFrame_configuration_(rect, config)
+        self._webview.setValue_forKey_(False, "drawsBackground")  # transparent bg
         self.win.contentView().addSubview_(self._webview)
         self._webview.setAutoresizingMask_(18)  # width|height sizable
 
