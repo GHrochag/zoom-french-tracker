@@ -15,24 +15,20 @@ import calendar
 from datetime import datetime
 from pathlib import Path
 
-try:
-    import rumps
-    import objc
-    from Foundation import (
-        NSBundle, NSURLRequest, NSURL, NSTimer, NSDictionary,
-        NSMutableParagraphStyle, NSParagraphStyleAttributeName,
-        NSFontAttributeName, NSForegroundColorAttributeName,
-        NSAttributedString, NSMakeRect,
-    )
-    from AppKit import (
-        NSWindow, NSBackingStoreBuffered,
-        NSFloatingWindowLevel, NSView, NSScrollView,
-        NSFont, NSColor,
-        NSScreen, NSApp,
-    )
-    APP_KIT_OK = True
-except ImportError:
-    APP_KIT_OK = False
+import rumps
+import objc
+from Foundation import (
+    NSBundle, NSURLRequest, NSURL, NSTimer, NSDictionary,
+    NSMutableParagraphStyle, NSParagraphStyleAttributeName,
+    NSFontAttributeName, NSForegroundColorAttributeName,
+    NSAttributedString, NSMakeRect,
+)
+from AppKit import (
+    NSWindow, NSBackingStoreBuffered,
+    NSFloatingWindowLevel, NSView, NSScrollView,
+    NSFont, NSColor, NSBezierPath,
+    NSScreen, NSApp,
+)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import db
@@ -218,31 +214,30 @@ class CalendarView(NSView):
 
     def drawRect_(self, rect):
         """Draw the entire calendar."""
-        ctx = objc.lookUpClass('NSGraphicsContext').currentContext().CGContext()
         w = self.bounds().size.width
         total_h = self._total_height()
         y = total_h - self.TOP_PAD
 
         # ── Background ──
-        self._fill_rect(ctx, 0, 0, w, total_h, CLR_BG)
+        self._fill_rect(0, 0, w, total_h, CLR_BG)
 
         # ── Navigation ──
-        y = self._draw_nav(ctx, y, w)
-        y = self._draw_header_cards(ctx, y, w)
-        y = self._draw_grid(ctx, y, w)
-        self._draw_history(ctx, y, w)
+        y = self._draw_nav(y, w)
+        y = self._draw_header_cards(y, w)
+        y = self._draw_grid(y, w)
+        self._draw_history(y, w)
 
-    def _fill_rect(self, ctx, x, y, w, h, color, radius=0):
-        ctx.setFillColor_(objc.objc_method.MakeCFTypeFromStruct(color))
+    def _fill_rect(self, x, y, w, h, color, radius=0):
+        """Fill a rectangle with optional rounded corners."""
+        NSColor.colorWithRed_green_blue_alpha_(*color).setFill()
         if radius > 0:
-            path = objc.lookUpClass('NSBezierPath').bezierPathWithRoundedRect_xRadius_yRadius_(
+            NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
                 ((x, y), (w, h)), radius, radius
-            )
-            path.fill()
+            ).fill()
         else:
-            ctx.fillRect_(((x, y), (w, h)))
+            NSBezierPath.fillRect_(((x, y), (w, h)))
 
-    def _draw_text(self, ctx, x, y, text, font_size, color, bold=False, align='left', max_w=None):
+    def _draw_text(self, x, y, text, font_size, color, bold=False, align='left', max_w=None):
         font = NSFont.boldSystemFontOfSize_(font_size) if bold else NSFont.systemFontOfSize_(font_size)
         para = NSMutableParagraphStyle.alloc().init()
         if align == 'center':
@@ -259,7 +254,12 @@ class CalendarView(NSView):
         actual_w = max_w if max_w else size.width
         attr_str.drawInRect_(((x, y - size.height), (actual_w, size.height)))
 
-    def _draw_nav(self, ctx, y, w):
+    def _stroke_rect(self, x, y, w, h, color, line_width=2):
+        NSColor.colorWithRed_green_blue_alpha_(*color).setStroke()
+        NSBezierPath.setDefaultLineWidth_(line_width)
+        NSBezierPath.strokeRect_(((x, y), (w, h)))
+
+    def _draw_nav(self, y, w):
         y -= self.MONTH_NAV_H
         title = f"{MESES[self._month]} {self._year}"
         font = NSFont.boldSystemFontOfSize_(15)
@@ -270,20 +270,20 @@ class CalendarView(NSView):
         t = NSAttributedString.alloc().initWithString_attributes_(title, attrs)
         ts = t.size()
         tx = self.PADDING_X + 38  # space for prev button
-        self._draw_text(ctx, tx, y + self.MONTH_NAV_H - ts.height - 4,
+        self._draw_text(tx, y + self.MONTH_NAV_H - ts.height - 4,
                        title, 15, CLR_TEXT, bold=True, align='left')
 
         # Prev button
-        self._fill_rect(ctx, self.PADDING_X, y + 4, 30, 22, BUTTON_CLR, radius=5)
-        self._draw_text(ctx, self.PADDING_X + 8, y + 8, "◀", 12, CLR_BLUE, bold=True)
+        self._fill_rect(self.PADDING_X, y + 4, 30, 22, BUTTON_CLR, radius=5)
+        self._draw_text(self.PADDING_X + 8, y + 8, "◀", 12, CLR_BLUE, bold=True)
 
         # Next button
-        self._fill_rect(ctx, self.PADDING_X + 170, y + 4, 30, 22, BUTTON_CLR, radius=5)
-        self._draw_text(ctx, self.PADDING_X + 178, y + 8, "▶", 12, CLR_BLUE, bold=True)
+        self._fill_rect(self.PADDING_X + 170, y + 4, 30, 22, BUTTON_CLR, radius=5)
+        self._draw_text(self.PADDING_X + 178, y + 8, "▶", 12, CLR_BLUE, bold=True)
 
         return y
 
-    def _draw_header_cards(self, ctx, y, w):
+    def _draw_header_cards(self, y, w):
         y -= 8
         card_w = (w - 2 * self.PADDING_X - 16) / 3
         card_h = 52
@@ -301,20 +301,20 @@ class CalendarView(NSView):
 
         for i, (label, value, vclr) in enumerate(cards):
             cx = self.PADDING_X + i * (card_w + 8)
-            self._fill_rect(ctx, cx, y, card_w, card_h, CLR_OVERLAY, radius=8)
-            self._draw_text(ctx, cx + card_w/2, y + card_h - 12,
+            self._fill_rect(cx, y, card_w, card_h, CLR_OVERLAY, radius=8)
+            self._draw_text(cx + card_w/2, y + card_h - 12,
                           label, 9, CLR_SUBTEXT, align='center')
-            self._draw_text(ctx, cx + card_w/2, y + 24,
+            self._draw_text(cx + card_w/2, y + 24,
                           value, 20, vclr, bold=True, align='center')
 
         return y - card_h
 
-    def _draw_grid(self, ctx, y, w):
+    def _draw_grid(self, y, w):
         month_consumed = sum(self._daily.values())
         card_w = w - 2 * self.PADDING_X
         y -= 12
 
-        self._draw_text(ctx, self.PADDING_X + card_w/2, y,
+        self._draw_text(self.PADDING_X + card_w/2, y,
                       f"Este mes: {format_balance(month_consumed)}",
                       10, CLR_SUBTEXT, align='center')
         y -= 20
@@ -322,7 +322,7 @@ class CalendarView(NSView):
         # Day headers
         for di, d in enumerate(DIAS):
             cx = self.PADDING_X + di * (self.CELL_W + self.GAP)
-            self._draw_text(ctx, cx + self.CELL_W/2, y,
+            self._draw_text(cx + self.CELL_W/2, y,
                           d, 9, CLR_BLUE, bold=True, align='center')
         y -= self.HEADER_H
 
@@ -337,36 +337,34 @@ class CalendarView(NSView):
             for di, day in enumerate(week):
                 cx = self.PADDING_X + di * (self.CELL_W + self.GAP)
                 if day == 0:
-                    self._fill_rect(ctx, cx, y, self.CELL_W, self.CELL_H, CLR_SURFACE, radius=5)
+                    self._fill_rect(cx, y, self.CELL_W, self.CELL_H, CLR_SURFACE, radius=5)
                 else:
                     h = self._daily.get(day, 0)
                     lvl = _day_level(h)
                     bg = LEVEL_COLORS[lvl] if lvl > 0 else CLR_SURFACE
                     txt_c = LEVEL_TXT[lvl]
-                    self._fill_rect(ctx, cx, y, self.CELL_W, self.CELL_H, bg, radius=5)
+                    self._fill_rect(cx, y, self.CELL_W, self.CELL_H, bg, radius=5)
                     # Today outline
                     if day == today_day:
-                        ctx.setStrokeColor_(objc.objc_method.MakeCFTypeFromStruct(CLR_YELLOW))
-                        ctx.setLineWidth_(2)
-                        ctx.strokeRect_(((cx, y), (self.CELL_W, self.CELL_H)))
+                        self._stroke_rect(cx, y, self.CELL_W, self.CELL_H, CLR_YELLOW)
                     # Day number
-                    self._draw_text(ctx, cx + self.CELL_W/2, y + 12,
+                    self._draw_text(cx + self.CELL_W/2, y + 12,
                                   str(day), 13, txt_c, bold=True, align='center')
                     if h > 0:
-                        self._draw_text(ctx, cx + self.CELL_W/2, y + 28,
+                        self._draw_text(cx + self.CELL_W/2, y + 28,
                                       format_balance(h), 8, txt_c, align='center')
             y -= (self.CELL_H + self.GAP)
 
         return y
 
-    def _draw_history(self, ctx, y, w):
+    def _draw_history(self, y, w):
         y -= 12
         card_w = w - 2 * self.PADDING_X
-        self._draw_text(ctx, self.PADDING_X, y, "📋 Historial", 12, CLR_BLUE, bold=True)
+        self._draw_text(self.PADDING_X, y, "📋 Historial", 12, CLR_BLUE, bold=True)
         y -= 18
 
         if not self._sessions:
-            self._draw_text(ctx, self.PADDING_X + card_w/2, y,
+            self._draw_text(self.PADDING_X + card_w/2, y,
                           "Sin sesiones este mes", 10, CLR_DIM, align='center')
             return y - 20
 
@@ -376,7 +374,7 @@ class CalendarView(NSView):
         col_x = [self.PADDING_X, self.PADDING_X + 60, self.PADDING_X + 120, self.PADDING_X + 180]
 
         for hdr, cx in zip(headers, col_x):
-            self._draw_text(ctx, cx, y, hdr, 8, CLR_SUBTEXT)
+            self._draw_text(cx, y, hdr, 8, CLR_SUBTEXT)
         y -= 16
 
         for s in self._sessions:
@@ -386,7 +384,7 @@ class CalendarView(NSView):
             if row_h * len(self._sessions) > 200:
                 # Alternating row bg
                 row_bg = CLR_SURFACE if self._sessions.index(s) % 2 == 0 else CLR_BG
-                self._fill_rect(ctx, self.PADDING_X, y - 2, card_w, row_h - 2, row_bg, radius=3)
+                self._fill_rect(self.PADDING_X, y - 2, card_w, row_h - 2, row_bg, radius=3)
 
             vals = [
                 sd.strftime("%d %b"),
@@ -395,7 +393,7 @@ class CalendarView(NSView):
                 format_balance(s["rounded_hours"]),
             ]
             for val, cx in zip(vals, col_x):
-                self._draw_text(ctx, cx, y, val, 10, CLR_TEXT)
+                self._draw_text(cx, y, val, 10, CLR_TEXT)
             y -= row_h
 
         return y
@@ -450,36 +448,34 @@ class DayDetailView(NSView):
         return self
 
     def drawRect_(self, rect):
-        ctx = objc.lookUpClass('NSGraphicsContext').currentContext().CGContext()
         w = self.bounds().size.width
         h = self.bounds().size.height
-        self._fill_rect(ctx, 0, 0, w, h, CLR_BG)
+        self._fill_rect(0, 0, w, h, CLR_BG)
 
         title = f"{self._day} {MESES[self._month]} {self._year}"
-        self._draw_text(ctx, 14, h - 20, title, 13, CLR_BLUE, bold=True)
+        self._draw_text(14, h - 20, title, 13, CLR_BLUE, bold=True)
 
         if not self._sessions:
-            self._draw_text(ctx, 14, h - 44, "Sin sesiones", 11, CLR_DIM)
+            self._draw_text(14, h - 44, "Sin sesiones", 11, CLR_DIM)
         else:
             y = h - 44
             for s in self._sessions:
                 sd = datetime.strptime(s["start_time"], "%Y-%m-%d %H:%M:%S")
                 ed = datetime.strptime(s["end_time"], "%Y-%m-%d %H:%M:%S") if s["end_time"] else None
                 line = f"{sd.strftime('%H:%M')} → {ed.strftime('%H:%M') if ed else '--'}   {format_balance(s['rounded_hours'])}"
-                self._draw_text(ctx, 14, y, line, 12, CLR_TEXT)
+                self._draw_text(14, y, line, 12, CLR_TEXT)
                 y -= 22
 
-    def _fill_rect(self, ctx, x, y, w, h, color, radius=0):
-        ctx.setFillColor_(objc.objc_method.MakeCFTypeFromStruct(color))
+    def _fill_rect(self, x, y, w, h, color, radius=0):
+        NSColor.colorWithRed_green_blue_alpha_(*color).setFill()
         if radius > 0:
-            path = objc.lookUpClass('NSBezierPath').bezierPathWithRoundedRect_xRadius_yRadius_(
+            NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
                 ((x, y), (w, h)), radius, radius
-            )
-            path.fill()
+            ).fill()
         else:
-            ctx.fillRect_(((x, y), (w, h)))
+            NSBezierPath.fillRect_(((x, y), (w, h)))
 
-    def _draw_text(self, ctx, x, y, text, font_size, color, bold=False, align='left'):
+    def _draw_text(self, x, y, text, font_size, color, bold=False, align='left'):
         font = NSFont.boldSystemFontOfSize_(font_size) if bold else NSFont.systemFontOfSize_(font_size)
         para = NSMutableParagraphStyle.alloc().init()
         if align == 'center':
@@ -621,10 +617,6 @@ class ZoomFrenchTracker(rumps.App):
                 rumps.alert("Error", "Ingresa un número válido (ej: 38).")
 
     def _show_calendar(self, _):
-        if not APP_KIT_OK:
-            rumps.alert("Error", "AppKit no disponible.")
-            return
-
         if self.calendar_window is not None:
             try:
                 self.calendar_window.win.close()
