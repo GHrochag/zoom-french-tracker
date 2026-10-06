@@ -38,10 +38,18 @@ if [ -z "$PYTHON" ]; then
 fi
 echo "   Using: $PYTHON ($($PYTHON --version))"
 
-# ── Install pip dependencies ──────────────────────────────────
+# ── Create virtual environment ───────────────────────────────
 echo ""
+echo "→ Setting up virtual environment..."
+VENV_DIR="$APP_DIR/.venv"
+if [ ! -d "$VENV_DIR" ]; then
+    "$PYTHON" -m venv "$VENV_DIR"
+fi
+VENV_PYTHON="$VENV_DIR/bin/python"
+
+# ── Install pip dependencies ──────────────────────────────────
 echo "→ Installing Python dependencies..."
-"$PYTHON" -m pip install --user -r "$APP_DIR/requirements.txt"
+"$VENV_PYTHON" -m pip install -r "$APP_DIR/requirements.txt"
 
 # ── Check for tkinter ─────────────────────────────────────────
 echo ""
@@ -70,7 +78,7 @@ cat > "$PLIST_SRC" << PLIST
     <string>com.nous.zoomfrenchtracker</string>
     <key>ProgramArguments</key>
     <array>
-        <string>$PYTHON</string>
+        <string>$VENV_PYTHON</string>
         <string>$APP_DIR/zoom_tracker.py</string>
     </array>
     <key>RunAtLoad</key>
