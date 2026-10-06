@@ -17,7 +17,7 @@ from pathlib import Path
 try:
     import rumps
     import objc
-    from Foundation import NSBundle, NSURLRequest, NSURL
+    from Foundation import NSBundle, NSURLRequest, NSURL, NSTimer, NSDictionary
     from AppKit import (
         NSWindow, NSWindowStyleMaskTitled, NSWindowStyleMaskClosable,
         NSWindowStyleMaskResizable, NSBackingStoreBuffered,
@@ -343,28 +343,21 @@ if WEBKIT_AVAILABLE:
         def userContentController_didReceiveScriptMessage_(
             self, controller, message
         ):
-            body = message.body()
             try:
-                action = str(body["action"])
-            except (KeyError, TypeError):
-                return
-            objc.performSelectorOnMainThread_withObject_waitUntilDone_(
-                self, "_dispatch:", body, False
-            )
-
-        def _dispatch_(self, body):
-            try:
-                action = str(body["action"])
-                if action == "navigate":
-                    self._app._reload_webview(
-                        int(body["year"]), int(body["month"])
-                    )
-                elif action == "day":
-                    self._app._show_day_detail(
-                        int(body["year"]), int(body["month"]), int(body["day"])
-                    )
+                body = message.body()
+                year = int(body["year"])
+                month = int(body["month"])
             except Exception:
-                pass
+                return
+            # Defer via NSTimer (next run-loop iteration) to avoid
+            # WebKit re-entrancy crash when calling loadHTMLString
+            # from inside its own script-message callback.
+            info = NSDictionary.dictionaryWithDictionary_(
+                {"year": year, "month": month}
+            )
+            NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+                0.0, self._app, "_deferredLoad:", info, False
+            )
 
     def _create_popup(app):
         """Create a floating NSWindow with WKWebView."""
@@ -560,10 +553,6 @@ class ZoomFrenchTracker(rumps.App):
             return
         html = build_html(year, month)
         self._webview.loadHTMLString_baseURL_(html, None)
-
-    def _reload_webview(self, year, month):
-        """Called from JavaScript when user navigates months."""
-        self._load_html(year, month)
 
     def _quit(self, _):
         if self._popup_window:
