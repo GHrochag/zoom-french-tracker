@@ -35,13 +35,11 @@ rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS"
 mkdir -p "$APP_DIR/Contents/Resources"
 
-# Launcher script
-cat > "$APP_DIR/Contents/MacOS/$APP_NAME" << 'LAUNCHER'
+# Launcher script — uses absolute path to project dir (survives copy to ~/Applications)
+cat > "$APP_DIR/Contents/MacOS/$APP_NAME" << EOF
 #!/bin/bash
-APP_DIR="$(cd "$(dirname "$0")/../../.." && pwd)"
-export PATH="$APP_DIR/.venv/bin:$PATH"
-exec "$APP_DIR/.venv/bin/python3" "$APP_DIR/zoom_tracker.py"
-LAUNCHER
+exec "$SCRIPT_DIR/.venv/bin/python3" "$SCRIPT_DIR/zoom_tracker.py"
+EOF
 chmod +x "$APP_DIR/Contents/MacOS/$APP_NAME"
 
 # Info.plist
