@@ -58,6 +58,8 @@ cat > "$APP_DIR/Contents/Info.plist" << PLIST
     <string>APPL</string>
     <key>CFBundleVersion</key>
     <string>1.0</string>
+    <key>CFBundleIconFile</key>
+    <string>icon</string>
     <key>LSUIElement</key>
     <true/>
 </dict>
