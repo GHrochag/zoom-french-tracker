@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Zoom French Tracker — macOS menu bar app.
-Tracks Zoom meetings via CptHost, deducts from hour balance.
-Calendar: clean text with monospaced grid.
+Detects Zoom meetings via CptHost process, deducts from hour balance.
+Calendar: WKWebView with Catppuccin Mocha dark theme.
 """
 
 import subprocess, sys, os, json, calendar, signal
@@ -10,347 +10,431 @@ from datetime import datetime
 from pathlib import Path
 
 import rumps
-from Foundation import (
-    NSAttributedString, NSMutableAttributedString,
-    NSMakeRange, NSMakeRect,
-)
+import objc
+from Foundation import NSBundle, NSURL, NSURLRequest
 from AppKit import (
     NSWindow, NSBackingStoreBuffered, NSFloatingWindowLevel,
-    NSScrollView, NSTextView, NSFont, NSColor, NSFontWeightBold,
+)
+from WebKit import (
+    WKWebView, WKWebViewConfiguration,
+    WKUserContentController, WKUserScript,
+    WKScriptMessageHandler,
 )
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import db
-from session_tracker import compute_duration, format_balance
+from session_tracker import round_session, compute_duration
 
+# ── Paths ──────────────────────────────────────────────
+DB_DIR = Path.home() / ".zoom_french_tracker"
+DB_DIR.mkdir(parents=True, exist_ok=True)
+os.chdir(DB_DIR)
 
-# ═══════════════════════════════════════════════════
-#  SINGLE INSTANCE
-# ═══════════════════════════════════════════════════
+# ── CSS ────────────────────────────────────────────────
+CSS = """
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,sans-serif;background:#1e1e2e;color:#cdd6f4;padding:14px;-webkit-user-select:none;user-select:none}
+.balance-row{display:flex;gap:10px;margin-bottom:16px}
+.balance-row .card{flex:1;background:#313244;border-radius:10px;padding:12px 14px;text-align:center}
+.balance-row .card .label{font-size:11px;color:#a6adc8;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+.balance-row .card .value{font-size:22px;font-weight:700}
+.balance-row .card .value.bal{color:#a6e3a1}
+.balance-row .card .value.buy{color:#89b4fa}
+.balance-row .card .value.used{color:#f38ba8}
+.cal-wrap{text-align:center;margin-bottom:14px}
+.cal-wrap .nav-row{display:flex;align-items:center;justify-content:center;gap:16px;margin-bottom:12px}
+.cal-wrap .nav-row .month{font-size:15px;font-weight:600;color:#cdd6f4}
+.cal-wrap .nav-row button{background:#45475a;color:#cdd6f4;border:none;border-radius:6px;padding:4px 12px;font-size:15px;cursor:pointer}
+.cal-wrap .nav-row button:hover{background:#585b70}
+.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;max-width:340px;margin:0 auto}
+.cal .dh{font-size:11px;color:#6c7086;text-transform:uppercase;padding:4px 0}
+.cal .day{aspect-ratio:1;display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;background:#181825;color:#cdd6f4;position:relative}
+.cal .day .hrs{font-size:10px;color:#a6e3a1;margin-top:1px}
+.cal .day.cm{color:#cdd6f4}
+.cal .day.cm:hover{filter:brightness(1.3)}
+.cal .day.td{outline:2px solid #f9e2af;outline-offset:-2px}
+.cal .day.selected{outline:2px solid #89b4fa;outline-offset:-2px}
+.cal .day .dots{position:absolute;bottom:3px;left:0;right:0;display:flex;justify-content:center;gap:2px}
+.day-detail{background:#313244;border-radius:10px;padding:12px;margin-top:12px;display:none}
+.day-detail h3{font-size:14px;margin-bottom:8px;color:#cdd6f4}
+.day-detail .sess{font-size:12px;color:#bac2de;padding:4px 0;border-bottom:1px solid #45475a}
+.day-detail .sess:last-child{border:none}
+.hist-title{font-size:14px;font-weight:600;color:#cdd6f4;margin:16px 0 8px}
+.hist-table{width:100%;border-collapse:collapse;font-size:12px}
+.hist-table th{text-align:left;color:#6c7086;padding:4px 8px;font-weight:500;border-bottom:1px solid #45475a}
+.hist-table td{color:#bac2de;padding:5px 8px;border-bottom:1px solid #313244}
+.hist-table .h-hrs{text-align:right;color:#a6e3a1;font-weight:600}
+.empty{text-align:center;color:#585b70;padding:20px;font-size:13px}
+"""
 
-LOCK = Path.home() / ".zoom_french_tracker" / ".app.lock"
+# ── Detection ──────────────────────────────────────────
+def is_in_meeting():
+    """Checks if CptHost process is running (Zoom meeting active)."""
+    try:
+        result = subprocess.run(
+            ["pgrep", "-x", "CptHost"],
+            capture_output=True, text=True, timeout=3,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
 
-def lock():
-    LOCK.parent.mkdir(parents=True, exist_ok=True)
-    if LOCK.exists():
+# ── Formatting ─────────────────────────────────────────
+def format_balance(hours):
+    h = int(hours)
+    m = int((hours - h) * 60)
+    if m == 0:
+        return f"{h}h"
+    return f"{h}h{m}m"
+
+# ── Lock ───────────────────────────────────────────────
+LOCK_FILE = DB_DIR / ".app.lock"
+
+def acquire_lock():
+    if LOCK_FILE.exists():
         try:
-            os.kill(int(LOCK.read_text().strip()), 0)
+            old_pid = int(LOCK_FILE.read_text().strip())
+            os.kill(old_pid, 0)
             return False
-        except: pass
-    LOCK.write_text(str(os.getpid()))
+        except (OSError, ValueError):
+            pass
+    LOCK_FILE.write_text(str(os.getpid()))
     return True
 
-def unlock():
-    try: LOCK.unlink(missing_ok=True)
-    except: pass
-
-
-# ═══════════════════════════════════════════════════
-#  MEETING DETECTION
-# ═══════════════════════════════════════════════════
-
-def in_meeting():
+def release_lock():
     try:
-        r = subprocess.run(["pgrep","-x","CptHost"], capture_output=True, text=True, timeout=3)
-        return r.returncode == 0
-    except: pass
-    try:
-        r = subprocess.run(["ps","-eo","comm"], capture_output=True, text=True, timeout=3)
-        for l in r.stdout.splitlines():
-            if l.strip() == "CptHost": return True
-    except: pass
-    return False
+        LOCK_FILE.unlink(missing_ok=True)
+    except Exception:
+        pass
 
-
-# ═══════════════════════════════════════════════════
-#  CALENDAR TEXT BUILDER
-# ═══════════════════════════════════════════════════
-
-MESES = ["","Enero","Febrero","Marzo","Abril","Mayo","Junio",
-         "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"]
-
-WHITE  = NSColor.whiteColor()
-GREEN  = NSColor.colorWithRed_green_blue_alpha_(0.65,0.89,0.63,1.0)
-BLUE   = NSColor.colorWithRed_green_blue_alpha_(0.54,0.71,0.98,1.0)
-YELLOW = NSColor.colorWithRed_green_blue_alpha_(0.98,0.89,0.69,1.0)
-GRAY   = NSColor.colorWithRed_green_blue_alpha_(0.65,0.68,0.78,1.0)
-RED    = NSColor.colorWithRed_green_blue_alpha_(0.95,0.55,0.66,1.0)
-
-def mono(size): return NSFont.monospacedSystemFontOfSize_weight_(size, 0.0)
-def bold(size): return NSFont.systemFontOfSize_weight_(size, NSFontWeightBold)
-
-
-def build_calendar(year, month):
-    """Return NSAttributedString calendar."""
-    out = NSMutableAttributedString.alloc().init()
-
-    def add(text, color=WHITE, font=None):
-        f = font or mono(12)
-        a = NSAttributedString.alloc().initWithString_attributes_(text,
-            {"NSFont": f, "NSColor": color})
-        out.appendAttributedString_(a)
-
-    # ── Header ──
-    bal = db.get_balance()
-    pur = db.get_total_credits()
-    con = db.get_total_consumed()
-    daily = db.get_daily_hours(year, month)
-    sessions = db.get_month_sessions(year, month)
-    month_h = sum(daily.values())
-
-    bc = GREEN if bal > 5 else (YELLOW if bal > 1 else RED)
-    add(f"Saldo: {format_balance(bal)}    ", bc, bold(15))
-    add(f"Comprado: {format_balance(pur)}    ", BLUE, bold(12))
-    add(f"Usado: {format_balance(con)}\n", GRAY, bold(12))
-    add(f"\n   {MESES[month]} {year}\n\n", BLUE, bold(18))
-
-    # ── Grid ──
-    today = datetime.now()
-    td = today.day if (today.year, today.month) == (year, month) else None
-    cal = calendar.Calendar(firstweekday=0)
-    weeks = cal.monthdayscalendar(year, month)
-
-    # Headers
-    add("   Lu  Ma  Mi  Ju  Vi  Sa  Do\n", BLUE, mono(11))
-
-    for w in weeks:
-        line = ""
-        for d in w:
-            if d == 0: line += "    "
-            else: line += f"{d:4d}"
-        line += "\n"
-        add(line, WHITE, mono(13))
-
-        # Hour annotations
-        ann = ""
-        has = False
-        for d in w:
-            if d == 0: ann += "    "
-            else:
-                h = daily.get(d, 0)
-                if h > 0:
-                    ann += f"{format_balance(h):>4}"
-                    has = True
-                elif d == td:
-                    ann += "  · "
-                else:
-                    ann += "    "
-        if has or td in w:
-            ann += "\n"
-            add(ann, GREEN, mono(9))
-
-    add(f"\nEste mes: {format_balance(month_h)}\n", GRAY, mono(10))
-
-    # ── History ──
-    add(f"\n── Historial ──\n", BLUE, bold(14))
-
-    if sessions:
-        for s in reversed(sessions):
-            sd = datetime.strptime(s["start_time"], "%Y-%m-%d %H:%M:%S")
-            ed = datetime.strptime(s["end_time"], "%Y-%m-%d %H:%M:%S") if s["end_time"] else None
-            et = ed.strftime("%H:%M") if ed else "--:--"
-            add(f"  {sd:%a} {sd.day:02d}  {sd:%H:%M}→{et}  {format_balance(s['rounded_hours'])}\n",
-                WHITE, mono(11))
-    else:
-        add("  Sin sesiones\n", GRAY, mono(11))
-
-    return out
-
-
-# ═══════════════════════════════════════════════════
-#  CALENDAR WINDOW
-# ═══════════════════════════════════════════════════
-
+# ── Calendar Window ────────────────────────────────────
 class CalendarWindow:
     def __init__(self, app):
-        self._app = app
-        self._year = datetime.now().year
-        self._month = datetime.now().month
+        self.app = app
+        mask = 1 | 2 | 8  # titled | closable | resizable
 
         self.win = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-            ((0, 0), (420, 580)),
-            1 | 2 | 8,  # titled | closable | resizable
-            NSBackingStoreBuffered, False
+            ((0, 0), (400, 560)), mask, NSBackingStoreBuffered, False
         )
-        self.win.setTitle_("📅  Calendario")
+        self.win.setTitle_("Calendario")
         self.win.setLevel_(NSFloatingWindowLevel)
-        self.win.setBackgroundColor_(
-            NSColor.colorWithRed_green_blue_alpha_(0.118,0.118,0.180,1.0)
-        )
+        self.win.setCollectionBehavior_(1 | 4)  # canJoinAllSpaces | stationary
         self.win.setReleasedWhenClosed_(False)
+        self.win.setBackgroundColor_(objc.lookUpClass('NSColor').colorWithRed_green_blue_alpha_(0.12, 0.12, 0.18, 1.0))
         self.win.center()
 
-        scr = NSScrollView.alloc().initWithFrame_(self.win.contentView().bounds())
-        scr.setHasVerticalScroller_(True)
-        scr.setAutohidesScrollers_(True)
-        scr.setBorderType_(0)
-        scr.setDrawsBackground_(False)
-        scr.setAutoresizingMask_(18)  # width | height
+        # Config
+        config = WKWebViewConfiguration.alloc().init()
+        ctrl = WKUserContentController.alloc().init()
+        config.setUserContentController_(ctrl)
 
-        self.tv = NSTextView.alloc().initWithFrame_(scr.contentView().bounds())
-        self.tv.setEditable_(False)
-        self.tv.setSelectable_(True)
-        self.tv.setBackgroundColor_(
-            NSColor.colorWithRed_green_blue_alpha_(0.118,0.118,0.180,1.0)
+        # JavaScript message handler
+        class NavHandler(objc.lookUpClass("NSObject")):
+            @objc.signature(b"v@:@@")
+            def userContentController_didReceiveScriptMessage_(self, controller, msg):
+                try:
+                    body = msg.body()
+                    y, m = int(body["year"]), int(body["month"])
+                    # Defer via NSTimer to avoid re-entrancy
+                    from Foundation import NSTimer, NSDictionary
+                    info = NSDictionary.dictionaryWithDictionary_({"year": y, "month": m})
+                    NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+                        0.0, self._app, b'_deferredLoad:', info, False
+                    )
+                except Exception:
+                    pass
+
+        handler = NavHandler.alloc().init()
+        handler._app = app
+        ctrl.addScriptMessageHandler_name_(handler, "navigate")
+
+        # WebView
+        self.webview = WKWebView.alloc().initWithFrame_configuration_(
+            self.win.contentView().bounds(), config
         )
-        self.tv.setMinSize_((380, 400))
-        self.tv.setMaxSize_((1000, 100000))
-        self.tv.setVerticallyResizable_(True)
-        self.tv.setHorizontallyResizable_(False)
-        scr.setDocumentView_(self.tv)
-        self.win.contentView().addSubview_(scr)
+        self.webview.setAutoresizingMask_(2 | 16)  # widthSizable | heightSizable
+        self.win.contentView().addSubview_(self.webview)
 
-        self._load()
+    def load_html(self, year, month):
+        html = build_html(year, month)
+        self.webview.loadHTMLString_baseURL_(html, None)
 
-    def _load(self):
-        self.tv.textStorage().setAttributedString_(
-            build_calendar(self._year, self._month)
-        )
+    def close(self):
+        self.win.close()
 
-    def prev(self):
-        m, y = self._month - 1, self._year
-        if m < 1: m, y = 12, y - 1
-        if y >= 2020:
-            self._month, self._year = m, y
-            self._load()
+# ── HTML Builder ───────────────────────────────────────
+DIAS_SEMANA_ES = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
+MESES_ES = [
+    "", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+    "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"
+]
 
-    def next(self):
-        m, y = self._month + 1, self._year
-        if m > 12: m, y = 1, y + 1
-        self._month, self._year = m, y
-        self._load()
+def build_html(year, month):
+    balance = db.get_balance()
+    bought = db.get_total_credits()
+    used = bought - balance
 
+    daily = db.get_daily_hours(year, month)
+    sessions = db.get_month_sessions(year, month)
 
-# ═══════════════════════════════════════════════════
-#  MAIN APP
-# ═══════════════════════════════════════════════════
+    # Calendar grid
+    cal = calendar.Calendar(firstweekday=0)  # Monday first
+    weeks = cal.monthdayscalendar(year, month)
+    today = datetime.now()
+    today_day = today.day if today.year == year and today.month == month else 0
 
-NSFontWeightBold = 0.6
+    cal_cells = ""
+    for d in DIAS_SEMANA_ES:
+        cal_cells += f'<div class="dh">{d}</div>'
+    for week in weeks:
+        for day in week:
+            if day == 0:
+                cal_cells += '<div class="day"></div>'
+            else:
+                cls = "cm"  # current month day
+                if day == today_day:
+                    cls += " td"
+                hours = daily.get(day, 0)
+                hrs_html = f'<span class="hrs">{hours:.1f}h</span>' if hours > 0 else ""
+                cal_cells += (
+                    f'<div class="day {cls}" '
+                    f'onclick="showDay({year},{month},{day},event)" '
+                    f'data-day="{day}" data-hrs="{hours:.1f}">'
+                    f'{day}{hrs_html}'
+                    f'</div>'
+                )
 
+    # Sessions JSON for JS
+    sess_data = []
+    for s in sessions:
+        sd = datetime.strptime(str(s["start_time"]), "%Y-%m-%d %H:%M:%S")
+        ed = datetime.strptime(str(s["end_time"]), "%Y-%m-%d %H:%M:%S")
+        sess_data.append({
+            "day": sd.day,
+            "start": sd.strftime("%H:%M"),
+            "end": ed.strftime("%H:%M"),
+            "hours": s["rounded_hours"],
+        })
 
+    # History table
+    hist_rows = ""
+    if sessions:
+        for s in sessions:
+            sd = datetime.strptime(str(s["start_time"]), "%Y-%m-%d %H:%M:%S")
+            ed = datetime.strptime(str(s["end_time"]), "%Y-%m-%d %H:%M:%S")
+            hist_rows += (
+                f'<tr>'
+                f'<td>{sd.day:02d} {MESES_ES[sd.month][:3]} {sd.strftime("%H")}:{sd.strftime("%M")}</td>'
+                f'<td>{ed.strftime("%H:%M")}</td>'
+                f'<td class="h-hrs">{s["rounded_hours"]:.1f}h</td>'
+                f'</tr>'
+            )
+
+    return f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>{CSS}</style></head><body>
+
+<div class="balance-row">
+  <div class="card"><div class="label">Saldo</div><div class="value bal">{format_balance(balance)}</div></div>
+  <div class="card"><div class="label">Comprado</div><div class="value buy">{format_balance(bought)}</div></div>
+  <div class="card"><div class="label">Usado</div><div class="value used">{format_balance(used)}</div></div>
+</div>
+
+<div class="cal-wrap">
+  <div class="nav-row">
+    <button onclick="nav({year},{month-1},event)">◀</button>
+    <span class="month">{MESES_ES[month]} {year}</span>
+    <button onclick="nav({year},{month+1},event)">▶</button>
+  </div>
+  <div class="cal">{cal_cells}</div>
+</div>
+
+<div class="day-detail" id="dayDetail">
+  <h3 id="dayTitle"></h3>
+  <div id="daySessions"></div>
+</div>
+
+<div class="hist-title">📋 Historial</div>
+{'' if sessions else '<div class="empty">Sin sesiones este mes</div>'}
+<table class="hist-table"><tbody>{hist_rows}</tbody></table>
+
+<script>
+var SESSIONS = {json.dumps(sess_data)};
+
+function nav(y,m,e){{
+    e.preventDefault();
+    e.stopPropagation();
+    window.webkit.messageHandlers.navigate.postMessage({{year:y,month:m}});
+}}
+
+function showDay(y,m,d,e){{
+    e.stopPropagation();
+    document.querySelectorAll('.day.selected').forEach(function(el){{el.classList.remove('selected')}});
+    e.currentTarget.classList.add('selected');
+    var detail=document.getElementById('dayDetail');
+    var title=document.getElementById('dayTitle');
+    var list=document.getElementById('daySessions');
+    title.textContent='{MESES_ES[month]} ' + d + ', {year}';
+    var daySess=SESSIONS.filter(function(s){{return s.day==d}});
+    list.innerHTML=daySess.length
+        ?daySess.map(function(s){{return '<div class="sess">'+s.start+' – '+s.end+' · <b>'+s.hours+'h</b></div>'}}).join('')
+        :'<div class="sess" style="color:#6c7086">Sin sesiones este día</div>';
+    detail.style.display='block';
+}}
+</script>
+</body></html>"""
+
+# ── App ─────────────────────────────────────────────────
 class ZoomFrenchTracker(rumps.App):
     def __init__(self):
-        super().__init__(name="ZoomFrenchTracker", title="🇫🇷 --h")
-        self._meeting = False
-        self._sid = None
-        self._alert2 = False
-        self._alert1 = False
-        self.cal = None
-
+        super().__init__("🇫🇷 Zoom French Tracker", quit_button=None)
         db.init_db()
+
+        self.in_meeting = False
+        self.active_session_id = None
+        self.cal_win = None
+
         self._update_display()
         self._build_menu()
 
-        self.timer = rumps.Timer(self._tick, 5)
-        self.timer.start()
-
-        a = db.get_active_session()
-        if a: db.cancel_session(a["id"])
+        # Timer: check every 5 seconds
+        rumps.Timer(self._tick, 5).start()
 
     def _build_menu(self):
         self.menu.clear()
-        self.menu.update([
-            rumps.MenuItem("➕ Agregar horas…", callback=self._add_hours),
-            rumps.MenuItem("📅 Calendario", callback=self._show_cal),
-            rumps.MenuItem("◀  Mes anterior", callback=self._prev),
-            rumps.MenuItem("▶  Mes siguiente", callback=self._next),
-            None,
-            rumps.MenuItem("❌  Salir", callback=self._quit),
-        ])
+        self.menu.add(rumps.MenuItem("📅 Calendario", callback=self._show_cal))
+        self.menu.add(rumps.MenuItem("◀  Mes anterior", callback=self._prev_month))
+        self.menu.add(rumps.MenuItem("▶  Mes siguiente", callback=self._next_month))
+        self.menu.add(rumps.separator)
+        self.menu.add(rumps.MenuItem("➕ Recargar horas", callback=self._add_credits))
+        self.menu.add(rumps.separator)
+        self.menu.add(rumps.MenuItem("Salir", callback=self._quit))
 
     def _tick(self, _):
         try:
-            m = in_meeting()
-            if m and not self._meeting: self._start()
-            elif not m and self._meeting: self._stop()
-            self._meeting = m
-            self._update_display()
-        except: pass
-
-    def _start(self):
-        a = db.get_active_session()
-        if a: db.cancel_session(a["id"])
-        self._sid = db.start_session(datetime.now())
-
-    def _stop(self):
-        if not self._sid: return
-        a = db.get_active_session()
-        if not a or a["id"] != self._sid:
-            self._sid = None; return
-        end = datetime.now()
-        start = datetime.strptime(a["start_time"], "%Y-%m-%d %H:%M:%S")
-        mins, rnd = compute_duration(start, end)
-        if rnd == 0: db.cancel_session(a["id"])
-        else:
-            db.end_session(a["id"], end, mins, rnd)
-            self._check_alerts()
-        self._sid = None
+            meeting_now = is_in_meeting()
+            if meeting_now and not self.in_meeting:
+                self._on_meeting_started()
+            elif not meeting_now and self.in_meeting:
+                self._on_meeting_ended()
+            self.in_meeting = meeting_now
+        except Exception:
+            pass
         self._update_display()
-        if self.cal: self.cal._load()
+
+    def _on_meeting_started(self):
+        self.active_session_id = db.start_session(datetime.now())
+
+    def _on_meeting_ended(self):
+        if self.active_session_id:
+            now = datetime.now()
+            duration_min = compute_duration(
+                datetime.strptime(db.get_session_start(self.active_session_id), "%Y-%m-%d %H:%M:%S"),
+                now
+            )
+            if duration_min >= 3:
+                rounded = round_session(duration_min)
+                db.end_session(self.active_session_id, now, duration_min, rounded)
+                balance = db.get_balance()
+                if 0 < balance <= 2:
+                    try:
+                        rumps.notification(
+                            "⚠️ Saldo bajo",
+                            f"Quedan {format_balance(balance)}",
+                            "Recarga para continuar"
+                        )
+                    except Exception:
+                        pass
+            else:
+                db.cancel_session(self.active_session_id)
+            self.active_session_id = None
 
     def _update_display(self):
-        b = db.get_balance()
-        p = "🟢 " if self._meeting else "🇫🇷 "
-        self.title = f"⚠️ {format_balance(b)}" if b <= 1 else f"{p}{format_balance(b)}"
+        balance = db.get_balance()
+        prefix = "🟢 " if self.in_meeting else "🇫🇷 "
+        if balance <= 1:
+            self.title = f"⚠️ {format_balance(balance)}"
+        else:
+            self.title = f"{prefix}{format_balance(balance)}"
 
-    def _check_alerts(self):
-        b = db.get_balance()
-        if b <= 1.0 and not self._alert1:
-            rumps.notification("⚠️  Queda 1 hora", "", "Compra más horas.")
-            self._alert1 = self._alert2 = True
-        elif b <= 2.0 and not self._alert2:
-            rumps.notification("⚠️  Quedan 2 horas", "", "Compra más horas.")
-            self._alert2 = True
+    def _deferredLoad_(self, timer):
+        info = timer.userInfo()
+        self._load_calendar(int(info["year"]), int(info["month"]))
 
-    def _add_hours(self, _):
-        r = rumps.Window(
-            title="Agregar horas",
-            message="¿Cuántas horas compraste?",
-            ok="Agregar", cancel="Cancelar", dimensions=(200,40),
-        ).run()
-        if r.clicked and r.text:
-            try:
-                v = float(r.text.strip())
-                if v <= 0 or v > 200:
-                    rumps.alert("Error", "Cantidad inválida."); return
-                db.add_credits(v, note="Compra")
-                self._update_display()
-                self._alert2 = self._alert1 = False
-                if self.cal: self.cal._load()
-            except ValueError:
-                rumps.alert("Error", "Número inválido.")
+    def _load_calendar(self, year, month):
+        if self.cal_win:
+            self.cal_win.load_html(year, month)
 
     def _show_cal(self, _):
-        try:
-            if self.cal: self.cal.win.close(); self.cal = None
-        except: pass
-        try:
-            self.cal = CalendarWindow(self)
-            self.cal.win.makeKeyAndOrderFront_(None)
-        except Exception as e:
-            self.cal = None
-            rumps.alert("Error", str(e))
+        now = datetime.now()
+        self._open_calendar(now.year, now.month)
 
-    def _prev(self, _):
-        if self.cal: self.cal.prev()
+    def _open_calendar(self, year, month):
+        if self.cal_win is None:
+            self.cal_win = CalendarWindow(self)
+        self.cal_win.load_html(year, month)
+        self.cal_win.win.makeKeyAndOrderFront_(None)
 
-    def _next(self, _):
-        if self.cal: self.cal.next()
+    def _prev_month(self, _):
+        if self.cal_win is None:
+            now = datetime.now()
+            self._open_calendar(now.year, now.month - 1 if now.month > 1 else now.year - 1, 12)
+        self.cal_win.load_html(*self._prev_month_date())
+
+    def _next_month(self, _):
+        if self.cal_win is None:
+            now = datetime.now()
+            self._open_calendar(now.year, now.month + 1 if now.month < 12 else now.year + 1, 1)
+        self.cal_win.load_html(*self._next_month_date())
+
+    def _prev_month_date(self):
+        now = datetime.now()
+        if now.month == 1:
+            return (now.year - 1, 12)
+        return (now.year, now.month - 1)
+
+    def _next_month_date(self):
+        now = datetime.now()
+        if now.month == 12:
+            return (now.year + 1, 1)
+        return (now.year, now.month + 1)
+
+    def _add_credits(self, _):
+        try:
+            window = rumps.Window(
+                title="Recargar horas",
+                message="¿Cuántas horas compraste?",
+                ok="Agregar",
+                cancel="Cancelar",
+                dimensions=(200, 40)
+            )
+            response = window.run()
+            if response.clicked and response.text:
+                hours = float(response.text)
+                if hours > 0:
+                    db.add_credits(hours)
+                    self._update_display()
+                    rumps.notification("✅ Recarga", f"+{format_balance(hours)}", "")
+                    if self.cal_win:
+                        now = datetime.now()
+                        self._load_calendar(now.year, now.month)
+        except (ValueError, AttributeError):
+            pass
 
     def _quit(self, _):
         try:
-            if self.cal: self.cal.win.close()
-        except: pass
-        unlock()
+            if self.cal_win:
+                self.cal_win.close()
+        except Exception:
+            pass
+        release_lock()
         rumps.quit_application()
 
-
+# ── Main ───────────────────────────────────────────────
 if __name__ == "__main__":
-    if not lock():
-        rumps.notification("Zoom French Tracker", "",
-                           "Ya está en la barra de menú.")
+    if not acquire_lock():
+        rumps.notification("Zoom French Tracker", "", "Ya está corriendo en la barra de menú.")
         sys.exit(0)
     try:
         ZoomFrenchTracker().run()
     finally:
-        unlock()
+        release_lock()
