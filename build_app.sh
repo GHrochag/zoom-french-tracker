@@ -37,8 +37,10 @@ mkdir -p "$APP_DIR/Contents/Resources"
 
 # Launcher script — uses absolute path to project dir (survives copy to ~/Applications)
 cat > "$APP_DIR/Contents/MacOS/$APP_NAME" << EOF
-#!/bin/bash
-exec "$SCRIPT_DIR/.venv/bin/python3" "$SCRIPT_DIR/zoom_tracker.py"
+#!/usr/bin/env python3
+import os, sys
+sys.path.insert(0, "$SCRIPT_DIR")
+os.execv("$SCRIPT_DIR/.venv/bin/python3", ["python3", "$SCRIPT_DIR/zoom_tracker.py"])
 EOF
 chmod +x "$APP_DIR/Contents/MacOS/$APP_NAME"
 
