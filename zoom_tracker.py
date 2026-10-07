@@ -18,7 +18,6 @@ from AppKit import (
 from WebKit import (
     WKWebView, WKWebViewConfiguration,
     WKUserContentController, WKUserScript,
-    WKScriptMessageHandler,
 )
 
 import db
