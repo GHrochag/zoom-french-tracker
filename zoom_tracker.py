@@ -154,7 +154,7 @@ class CalendarWindow:
         self.win.contentView().addSubview_(self.webview)
 
     def load_html(self, year, month):
-        html = build_html(year, month)
+        html = build_html(year, month, self.in_meeting, self.meeting_start_ts)
         self.webview.loadHTMLString_baseURL_(html, None)
 
     def close(self):
@@ -167,7 +167,7 @@ MESES_ES = [
     "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"
 ]
 
-def build_html(year, month):
+def build_html(year, month, in_meeting=False, meeting_start_ts=None):
     balance = db.get_balance()
     bought = db.get_total_credits()
     used = bought - balance
@@ -258,6 +258,8 @@ def build_html(year, month):
 
 <script>
 var SESSIONS = {json.dumps(sess_data)};
+var IN_MEETING = {json.dumps(in_meeting)};
+var MEETING_START = {json.dumps(meeting_start_ts)};
 
 function nav(y,m,e){{
     e.preventDefault();
@@ -289,6 +291,7 @@ class ZoomFrenchTracker(rumps.App):
         db.init_db()
 
         self.in_meeting = False
+        self.meeting_start_ts = None
         self.active_session_id = None
         self.cal_win = None
 
@@ -319,6 +322,7 @@ class ZoomFrenchTracker(rumps.App):
         self._update_display()
 
     def _on_meeting_started(self):
+        self.meeting_start_ts = datetime.now().isoformat()
         self.active_session_id = db.start_session(datetime.now())
 
     def _on_meeting_ended(self):
@@ -344,6 +348,7 @@ class ZoomFrenchTracker(rumps.App):
             else:
                 db.cancel_session(self.active_session_id)
             self.active_session_id = None
+        self.meeting_start_ts = None
 
     def _update_display(self):
         balance = db.get_balance()
