@@ -154,7 +154,7 @@ class CalendarWindow:
         self.win.contentView().addSubview_(self.webview)
 
     def load_html(self, year, month):
-        html = build_html(year, month, self.in_meeting, self.meeting_start_ts)
+        html = build_html(year, month, self.app.in_meeting, self.app.meeting_start_ts)
         self.webview.loadHTMLString_baseURL_(html, None)
 
     def close(self):
