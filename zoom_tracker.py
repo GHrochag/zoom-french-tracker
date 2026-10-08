@@ -295,6 +295,13 @@ class ZoomFrenchTracker(rumps.App):
         self.active_session_id = None
         self.cal_win = None
 
+        # Resume any active session on startup (e.g. app restarted mid-meeting)
+        sess = db.get_active_session()
+        if sess:
+            self.active_session_id = sess["id"]
+            self.in_meeting = True
+            self.meeting_start_ts = sess["start_time"]
+
         self._update_display()
         self._build_menu()
 
@@ -326,6 +333,12 @@ class ZoomFrenchTracker(rumps.App):
             self.cal_win.load_html(now.year, now.month)
 
     def _on_meeting_started(self):
+        # Reuse existing active session if present (don't duplicate)
+        sess = db.get_active_session()
+        if sess:
+            self.active_session_id = sess["id"]
+            self.meeting_start_ts = sess["start_time"]
+            return
         self.meeting_start_ts = datetime.now().isoformat()
         self.active_session_id = db.start_session(datetime.now())
 
