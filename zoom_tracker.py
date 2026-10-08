@@ -320,6 +320,10 @@ class ZoomFrenchTracker(rumps.App):
             else:
                 self._on_meeting_ended()
         self._update_display()
+        # Refresh open calendar on state change or live during meeting
+        if self.cal_win and self.cal_win.win.isVisible():
+            now = datetime.now()
+            self.cal_win.load_html(now.year, now.month)
 
     def _on_meeting_started(self):
         self.meeting_start_ts = datetime.now().isoformat()
