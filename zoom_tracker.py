@@ -319,18 +319,21 @@ class ZoomFrenchTracker(rumps.App):
         self.menu.add(rumps.MenuItem("Salir", callback=self._quit))
 
     def _tick(self, _):
-        meeting_now = is_in_meeting()
-        if meeting_now != self.in_meeting:
-            self.in_meeting = meeting_now
-            if meeting_now:
-                self._on_meeting_started()
-            else:
-                self._on_meeting_ended()
-        self._update_display()
-        # Refresh open calendar on state change or live during meeting
-        if self.cal_win and self.cal_win.win.isVisible():
-            now = datetime.now()
-            self.cal_win.load_html(now.year, now.month)
+        try:
+            meeting_now = is_in_meeting()
+            if meeting_now != self.in_meeting:
+                self.in_meeting = meeting_now
+                if meeting_now:
+                    self._on_meeting_started()
+                else:
+                    self._on_meeting_ended()
+            self._update_display()
+            # Refresh open calendar on state change or live during meeting
+            if self.cal_win and self.cal_win.win.isVisible():
+                now = datetime.now()
+                self.cal_win.load_html(now.year, now.month)
+        except Exception:
+            pass  # Keep timer alive — never crash silently
 
     def _on_meeting_started(self):
         # Reuse existing active session if present (don't duplicate)
@@ -346,7 +349,7 @@ class ZoomFrenchTracker(rumps.App):
         if self.active_session_id:
             now = datetime.now()
             duration_min = compute_duration(
-                datetime.strptime(db.get_session_start(self.active_session_id), "%Y-%m-%d %H:%M:%S"),
+                datetime.fromisoformat(self.meeting_start_ts),
                 now
             )
             if duration_min >= 3:
