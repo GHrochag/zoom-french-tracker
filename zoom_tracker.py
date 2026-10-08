@@ -309,15 +309,13 @@ class ZoomFrenchTracker(rumps.App):
         self.menu.add(rumps.MenuItem("Salir", callback=self._quit))
 
     def _tick(self, _):
-        try:
-            meeting_now = is_in_meeting()
-            if meeting_now and not self.in_meeting:
-                self._on_meeting_started()
-            elif not meeting_now and self.in_meeting:
-                self._on_meeting_ended()
+        meeting_now = is_in_meeting()
+        if meeting_now != self.in_meeting:
             self.in_meeting = meeting_now
-        except Exception:
-            pass
+            if meeting_now:
+                self._on_meeting_started()
+            else:
+                self._on_meeting_ended()
         self._update_display()
 
     def _on_meeting_started(self):
