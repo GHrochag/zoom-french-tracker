@@ -348,12 +348,11 @@ class ZoomFrenchTracker(rumps.App):
     def _on_meeting_ended(self):
         if self.active_session_id:
             now = datetime.now()
-            duration_min = compute_duration(
+            duration_min, rounded = compute_duration(
                 datetime.fromisoformat(self.meeting_start_ts),
                 now
             )
             if duration_min >= 3:
-                rounded = round_session(duration_min)
                 db.end_session(self.active_session_id, now, duration_min, rounded)
                 balance = db.get_balance()
                 if 0 < balance <= 2:
