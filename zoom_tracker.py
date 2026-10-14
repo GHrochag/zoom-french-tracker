@@ -86,11 +86,9 @@ def get_meeting_state():
     except Exception:
         return "idle"
 def format_balance(hours):
-    h = int(hours)
-    m = int((hours - h) * 60)
-    if m == 0:
-        return f"{h}h"
-    return f"{h}h{m}m"
+    if hours == int(hours):
+        return f"{int(hours)}h"
+    return f"{hours:.1f}h"
 
 # ── Lock ───────────────────────────────────────────────
 LOCK_FILE = DB_DIR / ".app.lock"
