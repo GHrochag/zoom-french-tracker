@@ -7,6 +7,7 @@ Calendar: WKWebView with Catppuccin Mocha dark theme.
 
 from pathlib import Path
 import subprocess, sys, os, json, calendar, signal
+from datetime import datetime
 
 import rumps
 import objc
