@@ -5,9 +5,8 @@ Detects Zoom meetings via CptHost process, deducts from hour balance.
 Calendar: WKWebView with Catppuccin Mocha dark theme.
 """
 
-import subprocess, sys, os, json, calendar, signal
-from datetime import datetime
 from pathlib import Path
+import subprocess, sys, os, json, calendar, signal
 
 import rumps
 import objc
@@ -67,26 +66,24 @@ body{font-family:-apple-system,sans-serif;background:#1e1e2e;color:#cdd6f4;paddi
 
 # ── Detection ──────────────────────────────────────────
 def get_meeting_state():
-    """Returns one of: "idle" (no Zoom), "waiting" (waiting for host), "active" (in meeting)."""
+    """Returns one of: 'idle' (no Zoom), 'waiting' (Zoom open, meeting not started), 'active' (in meeting).
+    
+    Detection logic:
+    - CptHost NOT running → idle
+    - CptHost running + aomhost NOT running → waiting (Zoom open but audio inactive)
+    - CptHost running + aomhost running → active (audio = meeting started)
+    """
+
     try:
-        zoom_running = subprocess.run(
-            ["pgrep", "-x", "CptHost"],
-            capture_output=True, text=True, timeout=3,
-        ).returncode == 0
-        if not zoom_running:
+        cpt = subprocess.run(["pgrep", "-x", "CptHost"], capture_output=True, timeout=3)
+        if cpt.returncode != 0:
             return "idle"
-        result = subprocess.run(
-            ["osascript", "-e", 'tell application "Zoom.us" to get meeting state'],
-            capture_output=True, text=True, timeout=3,
-        )
-        state = result.stdout.strip()
-        if "in meeting" in state.lower():
+        aom = subprocess.run(["pgrep", "-x", "aomhost"], capture_output=True, timeout=3)
+        if aom.returncode == 0:
             return "active"
         return "waiting"
     except Exception:
         return "idle"
-
-# ── Formatting ─────────────────────────────────────────
 def format_balance(hours):
     h = int(hours)
     m = int((hours - h) * 60)
