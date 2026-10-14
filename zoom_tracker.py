@@ -66,16 +66,25 @@ body{font-family:-apple-system,sans-serif;background:#1e1e2e;color:#cdd6f4;paddi
 """
 
 # ── Detection ──────────────────────────────────────────
-def is_in_meeting():
-    """Checks if CptHost process is running (Zoom meeting active)."""
+def get_meeting_state():
+    """Returns one of: "idle" (no Zoom), "waiting" (waiting for host), "active" (in meeting)."""
     try:
-        result = subprocess.run(
+        zoom_running = subprocess.run(
             ["pgrep", "-x", "CptHost"],
             capture_output=True, text=True, timeout=3,
+        ).returncode == 0
+        if not zoom_running:
+            return "idle"
+        result = subprocess.run(
+            ["osascript", "-e", 'tell application "Zoom.us" to get meeting state'],
+            capture_output=True, text=True, timeout=3,
         )
-        return result.returncode == 0
+        state = result.stdout.strip()
+        if "in meeting" in state.lower():
+            return "active"
+        return "waiting"
     except Exception:
-        return False
+        return "idle"
 
 # ── Formatting ─────────────────────────────────────────
 def format_balance(hours):
@@ -154,7 +163,7 @@ class CalendarWindow:
         self.win.contentView().addSubview_(self.webview)
 
     def load_html(self, year, month):
-        html = build_html(year, month, self.app.in_meeting, self.app.meeting_start_ts)
+        html = build_html(year, month, self.app.meeting_state == 'active', self.app.meeting_start_ts)
         self.webview.loadHTMLString_baseURL_(html, None)
 
     def close(self):
@@ -290,7 +299,7 @@ class ZoomFrenchTracker(rumps.App):
         super().__init__("🇫🇷 Zoom French Tracker", quit_button=None)
         db.init_db()
 
-        self.in_meeting = False
+        self.meeting_state = 'idle'
         self.meeting_start_ts = None
         self.active_session_id = None
         self.cal_win = None
@@ -299,7 +308,7 @@ class ZoomFrenchTracker(rumps.App):
         sess = db.get_active_session()
         if sess:
             self.active_session_id = sess["id"]
-            self.in_meeting = True
+            self.meeting_state = 'active'
             self.meeting_start_ts = sess["start_time"]
 
         self._update_display()
@@ -320,12 +329,13 @@ class ZoomFrenchTracker(rumps.App):
 
     def _tick(self, _):
         try:
-            meeting_now = is_in_meeting()
-            if meeting_now != self.in_meeting:
-                self.in_meeting = meeting_now
-                if meeting_now:
+            meeting_now = get_meeting_state()
+            if meeting_now != self.meeting_state:
+                previous = self.meeting_state
+                self.meeting_state = meeting_now
+                if meeting_now == "active":
                     self._on_meeting_started()
-                else:
+                elif previous == "active":
                     self._on_meeting_ended()
             self._update_display()
             # Refresh open calendar on state change or live during meeting
@@ -371,7 +381,12 @@ class ZoomFrenchTracker(rumps.App):
 
     def _update_display(self):
         balance = db.get_balance()
-        prefix = "🟢 " if self.in_meeting else "🇫🇷 "
+        if self.meeting_state == "active":
+            prefix = "🟢 "
+        elif self.meeting_state == "waiting":
+            prefix = "⏳ "
+        else:
+            prefix = "🇫🇷 " 
         if balance <= 1:
             self.title = f"⚠️ {format_balance(balance)}"
         else:
