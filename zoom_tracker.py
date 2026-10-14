@@ -67,24 +67,32 @@ body{font-family:-apple-system,sans-serif;background:#1e1e2e;color:#cdd6f4;paddi
 
 # ── Detection ──────────────────────────────────────────
 def get_meeting_state():
-    """Returns one of: 'idle' (no Zoom), 'waiting' (Zoom open, meeting not started), 'active' (in meeting).
-    
-    Detection logic:
-    - CptHost NOT running → idle
-    - CptHost running + aomhost NOT running → waiting (Zoom open but audio inactive)
-    - CptHost running + aomhost running → active (audio = meeting started)
-    """
-
+    """Returns one of: 'idle' (no Zoom), 'waiting' (CptHost alive < 120s), 'active' (CptHost alive >= 120s)."""
     try:
-        cpt = subprocess.run(["pgrep", "-x", "CptHost"], capture_output=True, timeout=3)
-        if cpt.returncode != 0:
+        result = subprocess.run(["pgrep", "-x", "CptHost"], capture_output=True, timeout=3)
+        if result.returncode != 0:
             return "idle"
-        aom = subprocess.run(["pgrep", "-x", "aomhost"], capture_output=True, timeout=3)
-        if aom.returncode == 0:
-            return "active"
-        return "waiting"
+        # Check how long CptHost has been running
+        elapsed = subprocess.run(["ps", "-o", "etime=", "-p", result.stdout.decode().strip().split()[0]],
+                                 capture_output=True, text=True, timeout=3)
+        elapsed_str = elapsed.stdout.strip()
+        # Parse elapsed time (formats: "MM:SS", "HH:MM:SS", "D-HH:MM:SS")
+        total_seconds = 0
+        parts = elapsed_str.split(":")
+        if "-" in parts[0]:
+            days, hms = parts[0].split("-")
+            total_seconds += int(days) * 86400
+            parts = [hms] + parts[1:]
+        if len(parts) == 3:
+            total_seconds += int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+        elif len(parts) == 2:
+            total_seconds += int(parts[0]) * 60 + int(parts[1])
+        if total_seconds < 120:
+            return "waiting"
+        return "active"
     except Exception:
         return "idle"
+
 def format_balance(hours):
     if hours == int(hours):
         return f"{int(hours)}h"
