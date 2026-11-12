@@ -681,6 +681,11 @@ class ZoomFrenchTracker(rumps.App):
                 f"à consommer en {format_hours_fr(duration)} par jour "
                 f"pendant {days} jours du mois de {MESES_FR[now.month]}"
             )
+            if owed > 0:
+                msg_fr += (
+                    f". Le dépôt inclut le paiement pour "
+                    f"{format_hours_fr(owed)} de la période passée."
+                )
             result = send_whatsapp_message(msg_fr)
             if result == "sent":
                 rumps.notification("📲 Alicia", "WhatsApp enviado ✅", "")
