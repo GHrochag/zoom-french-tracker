@@ -30,6 +30,15 @@ DB_DIR = Path.home() / ".zoom_french_tracker"
 DB_DIR.mkdir(parents=True, exist_ok=True)
 os.chdir(DB_DIR)
 
+
+def _log(msg: str):
+    """Append a diagnostic line to app.log (best-effort)."""
+    try:
+        with open(DB_DIR / "app.log", "a") as f:
+            f.write(f"{datetime.now().isoformat(timespec='seconds')}  {msg}\n")
+    except Exception:
+        pass
+
 # ── CSS ────────────────────────────────────────────────
 CSS = """
 *{margin:0;padding:0;box-sizing:border-box}
@@ -665,16 +674,23 @@ class ZoomFrenchTracker(rumps.App):
             ok="Confirmar",
             cancel="Cancelar",
         )
-        if resp == NSAlertFirstButtonReturn:  # 1000 → "Confirmar"
-            db.add_credits(total_hours, note=f"Recarga {MESES_ES[now.month]} {now.year}")
-            db.add_deposit(
-                now.year, now.month, days, duration, month_hours, owed,
-                total_hours, round(amount),
-            )
-            self._update_display()
-            rumps.notification(
-                "✅ Recarga", f"+{format_balance(total_hours)} · {format_money(amount)}", ""
-            )
+        _log(f"confirm dialog resp={resp!r} (NSAlertFirstButtonReturn={NSAlertFirstButtonReturn!r})")
+        if resp in (1, NSAlertFirstButtonReturn):  # "Confirmar"
+            try:
+                db.add_credits(total_hours, note=f"Recarga {MESES_ES[now.month]} {now.year}")
+                db.add_deposit(
+                    now.year, now.month, days, duration, month_hours, owed,
+                    total_hours, round(amount),
+                )
+                self._update_display()
+                rumps.notification(
+                    "✅ Recarga", f"+{format_balance(total_hours)} · {format_money(amount)}", ""
+                )
+            except Exception as e:
+                import traceback
+                _log("ERROR en confirmación:\n" + traceback.format_exc())
+                rumps.alert("Error", f"No se pudo registrar la recarga:\n{e}")
+                return
             # Notificar a Alicia por WhatsApp (en francés)
             msg_fr = (
                 f"Déposé ${amount:,.2f} pour {format_hours_fr(total_hours)}, "
@@ -742,6 +758,12 @@ class ZoomFrenchTracker(rumps.App):
 
 # ── Main ───────────────────────────────────────────────
 if __name__ == "__main__":
+    def _excepthook(exc_type, exc_value, tb):
+        import traceback
+        _log("UNCAUGHT EXCEPTION:\n" + "".join(traceback.format_exception(exc_type, exc_value, tb)))
+        sys.__excepthook__(exc_type, exc_value, tb)
+    sys.excepthook = _excepthook
+
     if not acquire_lock():
         rumps.notification("Zoom French Tracker", "", "Ya está corriendo en la barra de menú.")
         sys.exit(0)
