@@ -7,6 +7,7 @@ Calendar: WKWebView with Catppuccin Mocha dark theme.
 
 from pathlib import Path
 import subprocess, sys, os, json, calendar, signal
+import urllib.parse
 from datetime import datetime, date, timedelta
 
 import rumps
@@ -131,6 +132,44 @@ def format_money(amount: float) -> str:
     return f"${round(amount):,}"
 
 
+def format_hours_fr(hours: float) -> str:
+    """Format hours in French spacing: 1.5 -> '1 h 30', 19.0 -> '19 h'."""
+    h = int(hours)
+    m = int(round((hours - h) * 60))
+    if m == 60:
+        h += 1
+        m = 0
+    if m == 0:
+        return f"{h} h"
+    return f"{h} h {m:02d}"
+
+
+WHATSAPP_NUMBER = "522299193254"  # Alicia Bessoudo (+52 229 919 3254)
+
+
+def send_whatsapp_message(message: str) -> str:
+    """Open WhatsApp with the message pre-filled, then best-effort auto-send.
+
+    Returns 'sent', 'prefilled' or 'error'.
+    """
+    url = f"whatsapp://send?phone={WHATSAPP_NUMBER}&text={urllib.parse.quote(message)}"
+    try:
+        subprocess.run(["open", url], check=True, timeout=15)
+    except Exception:
+        return "error"
+    # Best-effort: focus WhatsApp and press Return to actually send.
+    try:
+        script = (
+            'tell application "WhatsApp" to activate\n'
+            "delay 1.5\n"
+            'tell application "System Events" to keystroke return\n'
+        )
+        subprocess.run(["osascript", "-e", script], check=True, timeout=15)
+        return "sent"
+    except Exception:
+        return "prefilled"
+
+
 def business_days_remaining(today: date = None) -> int:
     """Business days (Mon-Fri) remaining in the current month, excluding today."""
     today = today or date.today()
@@ -226,6 +265,11 @@ DIAS_SEMANA_ES = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
 MESES_ES = [
     "", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
     "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"
+]
+
+MESES_FR = [
+    "", "janvier", "février", "mars", "avril", "mai", "juin",
+    "juillet", "août", "septembre", "octobre", "novembre", "décembre"
 ]
 
 def build_html(year, month, in_meeting=False, meeting_start_ts=None):
@@ -631,6 +675,19 @@ class ZoomFrenchTracker(rumps.App):
             rumps.notification(
                 "✅ Recarga", f"+{format_balance(total_hours)} · {format_money(amount)}", ""
             )
+            # Notificar a Alicia por WhatsApp (en francés)
+            msg_fr = (
+                f"Déposé ${amount:,.2f} pour {format_hours_fr(total_hours)}, "
+                f"à consommer en {format_hours_fr(duration)} par jour "
+                f"pendant {days} jours du mois de {MESES_FR[now.month]}"
+            )
+            result = send_whatsapp_message(msg_fr)
+            if result == "sent":
+                rumps.notification("📲 Alicia", "WhatsApp enviado ✅", "")
+            elif result == "prefilled":
+                rumps.notification("📲 Alicia", "Mensaje listo en WhatsApp (presiona Enviar)", "")
+            else:
+                rumps.notification("📲 Alicia", "No se pudo abrir WhatsApp", "")
             if self.cal_win:
                 self._load_calendar(now.year, now.month)
 
