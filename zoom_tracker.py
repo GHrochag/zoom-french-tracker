@@ -7,13 +7,14 @@ Calendar: WKWebView with Catppuccin Mocha dark theme.
 
 from pathlib import Path
 import subprocess, sys, os, json, calendar, signal
-from datetime import datetime
+from datetime import datetime, date, timedelta
 
 import rumps
 import objc
 from Foundation import NSBundle, NSURL, NSURLRequest
 from AppKit import (
     NSWindow, NSBackingStoreBuffered, NSFloatingWindowLevel,
+    NSAlertFirstButtonReturn,
 )
 from WebKit import (
     WKWebView, WKWebViewConfiguration,
@@ -97,6 +98,53 @@ def format_balance(hours):
     if hours == int(hours):
         return f"{int(hours)}h"
     return f"{hours:.1f}h"
+
+
+# ── Recarga helpers ────────────────────────────────────
+def parse_duration(text: str) -> float:
+    """Parse a class duration into hours. Accepts '1:30', '1:00', '1.5', '2'."""
+    t = (text or "").strip().replace(",", ".")
+    if not t:
+        raise ValueError("vacío")
+    if ":" in t:
+        parts = t.split(":")
+        h = int(float(parts[0]))
+        m = int(float(parts[1])) if len(parts) > 1 and parts[1] else 0
+        return round(h + m / 60.0, 4)
+    return round(float(t), 4)
+
+
+def format_hours_hhmm(hours: float) -> str:
+    """Format hours as '1:30' style. 1.5 -> '1:30', 2.0 -> '2h'."""
+    h = int(hours)
+    m = int(round((hours - h) * 60))
+    if m == 60:
+        h += 1
+        m = 0
+    if m == 0:
+        return f"{h}h"
+    return f"{h}:{m:02d}"
+
+
+def format_money(amount: float) -> str:
+    """Format pesos with thousands separator, no decimals."""
+    return f"${round(amount):,}"
+
+
+def business_days_remaining(today: date = None) -> int:
+    """Business days (Mon-Fri) remaining in the current month, excluding today."""
+    today = today or date.today()
+    d = today + timedelta(days=1)
+    if today.month == 12:
+        last = date(today.year, 12, 31)
+    else:
+        last = date(today.year, today.month + 1, 1) - timedelta(days=1)
+    n = 0
+    while d <= last:
+        if d.weekday() < 5:
+            n += 1
+        d += timedelta(days=1)
+    return n
 
 # ── Lock ───────────────────────────────────────────────
 LOCK_FILE = DB_DIR / ".app.lock"
@@ -297,6 +345,93 @@ function showDay(y,m,d,e){{
 </script>
 </body></html>"""
 
+# ── Reports HTML ────────────────────────────────────────
+REPORTS_CSS = """
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,sans-serif;background:#1e1e2e;color:#cdd6f4;padding:16px;-webkit-user-select:none;user-select:none}
+h1{font-size:16px;font-weight:700;margin-bottom:14px}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;color:#6c7086;padding:6px 8px;font-weight:600;border-bottom:1px solid #45475a}
+td{color:#bac2de;padding:7px 8px;border-bottom:1px solid #313244}
+td.r-num{text-align:right;font-variant-numeric:tabular-nums}
+td.r-num.money{color:#a6e3a1;font-weight:700}
+tr.tot td{color:#cdd6f4;font-weight:700;border-top:1px solid #45475a;border-bottom:none}
+.empty{text-align:center;color:#585b70;padding:24px;font-size:13px}
+"""
+
+
+def build_reports_html():
+    deposits = db.get_deposits()
+    rows = ""
+    total_pesos = 0.0
+    total_horas = 0.0
+    for d in deposits:
+        rows += (
+            f"<tr>"
+            f"<td>{MESES_ES[d['month']]} {d['year']}</td>"
+            f"<td class='r-num'>{d['days']}</td>"
+            f"<td class='r-num'>{format_hours_hhmm(d['duration_hours'])}</td>"
+            f"<td class='r-num'>{d['month_hours']:.1f}h</td>"
+            f"<td class='r-num'>{d['owed_hours']:.1f}h</td>"
+            f"<td class='r-num'>{d['total_hours']:.1f}h</td>"
+            f"<td class='r-num money'>{format_money(d['amount_pesos'])}</td>"
+            f"</tr>"
+        )
+        total_pesos += d["amount_pesos"]
+        total_horas += d["total_hours"]
+    total_row = ""
+    if deposits:
+        total_row = (
+            f"<tr class='tot'>"
+            f"<td>Total</td><td></td><td></td><td></td><td></td>"
+            f"<td class='r-num'>{total_horas:.1f}h</td>"
+            f"<td class='r-num money'>{format_money(total_pesos)}</td>"
+            f"</tr>"
+        )
+    empty = "" if deposits else '<div class="empty">Sin recargas registradas</div>'
+    return f"""<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
+<style>{REPORTS_CSS}</style></head><body>
+<h1>📊 Reportes de recarga</h1>
+{empty}
+<table>
+<thead><tr>
+<th>Mes</th><th>Días</th><th>Duración</th><th>Horas mes</th><th>Adeudado</th><th>Total horas</th><th>Depositado</th>
+</tr></thead>
+<tbody>{rows}{total_row}</tbody>
+</table>
+</body></html>"""
+
+
+# ── Reports Window ─────────────────────────────────────
+class ReportsWindow:
+    def __init__(self, app):
+        self.app = app
+        mask = 1 | 2 | 8  # titled | closable | resizable
+
+        self.win = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+            ((0, 0), (620, 420)), mask, NSBackingStoreBuffered, False
+        )
+        self.win.setTitle_("Reportes")
+        self.win.setLevel_(NSFloatingWindowLevel)
+        self.win.setCollectionBehavior_(1 | 4)
+        self.win.setReleasedWhenClosed_(False)
+        self.win.setBackgroundColor_(objc.lookUpClass('NSColor').colorWithRed_green_blue_alpha_(0.12, 0.12, 0.18, 1.0))
+        self.win.center()
+
+        config = WKWebViewConfiguration.alloc().init()
+        self.webview = WKWebView.alloc().initWithFrame_configuration_(
+            self.win.contentView().bounds(), config
+        )
+        self.webview.setAutoresizingMask_(2 | 16)
+        self.win.contentView().addSubview_(self.webview)
+
+    def load_html(self):
+        self.webview.loadHTMLString_baseURL_(build_reports_html(), None)
+
+    def close(self):
+        self.win.close()
+
+
 # ── App ─────────────────────────────────────────────────
 class ZoomFrenchTracker(rumps.App):
     def __init__(self):
@@ -307,6 +442,7 @@ class ZoomFrenchTracker(rumps.App):
         self.meeting_start_ts = None
         self.active_session_id = None
         self.cal_win = None
+        self.reports_win = None
 
         # Resume any active session on startup (e.g. app restarted mid-meeting)
         sess = db.get_active_session()
@@ -328,6 +464,11 @@ class ZoomFrenchTracker(rumps.App):
         self.menu.add(rumps.MenuItem("▶  Mes siguiente", callback=self._next_month))
         self.menu.add(rumps.separator)
         self.menu.add(rumps.MenuItem("➕ Recargar horas", callback=self._add_credits))
+        self.menu.add(rumps.MenuItem("📊 Reportes", callback=self._show_reports))
+        self.menu.add(rumps.MenuItem(
+            f"💰 Tarifa (actual: {format_money(db.get_tarifa())})",
+            callback=self._set_tarifa,
+        ))
         self.menu.add(rumps.separator)
         self.menu.add(rumps.MenuItem("Salir", callback=self._quit))
 
@@ -439,31 +580,99 @@ class ZoomFrenchTracker(rumps.App):
         return (now.year, now.month + 1)
 
     def _add_credits(self, _):
+        tarifa = db.get_tarifa()
+        window = rumps.Window(
+            title="Recargar horas",
+            message="¿Duración de la clase? (ej. 1:30)",
+            default_text="1:30",
+            ok="Calcular",
+            cancel="Cancelar",
+            dimensions=(200, 40),
+        )
+        response = window.run()
+        if not response.clicked or not response.text:
+            return
         try:
+            duration = parse_duration(response.text)
+        except ValueError:
+            rumps.alert("Recargar horas", "Duración no válida. Usa formato 1:30 o 1.5.")
+            return
+        if duration <= 0:
+            rumps.alert("Recargar horas", "La duración debe ser mayor a 0.")
+            return
+
+        now = date.today()
+        days = business_days_remaining(now)
+        balance = db.get_balance()
+        owed = max(0.0, -balance)
+        month_hours = round(duration * days, 4)
+        total_hours = round(month_hours + owed, 4)
+        amount = total_hours * tarifa
+
+        msg = (
+            f"Debes depositar {format_money(amount)}\n\n"
+            f"{days} días hábiles × {format_hours_hhmm(duration)} = {month_hours:.1f}h\n"
+            f"Adeudado: {owed:.1f}h\n"
+            f"Total: {total_hours:.1f}h"
+        )
+        resp = rumps.alert(
+            title="Confirmar recarga",
+            message=msg,
+            ok="Confirmar",
+            cancel="Cancelar",
+        )
+        if resp == NSAlertFirstButtonReturn:  # 1000 → "Confirmar"
+            db.add_credits(total_hours, note=f"Recarga {MESES_ES[now.month]} {now.year}")
+            db.add_deposit(
+                now.year, now.month, days, duration, month_hours, owed,
+                total_hours, round(amount),
+            )
+            self._update_display()
+            rumps.notification(
+                "✅ Recarga", f"+{format_balance(total_hours)} · {format_money(amount)}", ""
+            )
+            if self.cal_win:
+                self._load_calendar(now.year, now.month)
+
+    def _set_tarifa(self, _):
+        try:
+            current = db.get_tarifa()
+            default = str(int(current)) if current == int(current) else str(current)
             window = rumps.Window(
-                title="Recargar horas",
-                message="¿Cuántas horas compraste?",
-                ok="Agregar",
+                title="Tarifa por hora",
+                message="Precio por hora en pesos (ej. 400)",
+                default_text=default,
+                ok="Guardar",
                 cancel="Cancelar",
-                dimensions=(200, 40)
+                dimensions=(200, 40),
             )
             response = window.run()
             if response.clicked and response.text:
-                hours = float(response.text)
-                if hours > 0:
-                    db.add_credits(hours)
-                    self._update_display()
-                    rumps.notification("✅ Recarga", f"+{format_balance(hours)}", "")
-                    if self.cal_win:
-                        now = datetime.now()
-                        self._load_calendar(now.year, now.month)
+                value = float(response.text.replace(",", "."))
+                if value <= 0:
+                    rumps.alert("Tarifa", "La tarifa debe ser mayor a 0.")
+                    return
+                db.set_tarifa(value)
+                self._build_menu()
+                rumps.notification("💰 Tarifa", f"{format_money(value)}/h", "")
         except (ValueError, AttributeError):
             pass
+
+    def _show_reports(self, _):
+        if self.reports_win is None:
+            self.reports_win = ReportsWindow(self)
+        self.reports_win.load_html()
+        self.reports_win.win.makeKeyAndOrderFront_(None)
 
     def _quit(self, _):
         try:
             if self.cal_win:
                 self.cal_win.close()
+        except Exception:
+            pass
+        try:
+            if self.reports_win:
+                self.reports_win.close()
         except Exception:
             pass
         release_lock()

@@ -47,6 +47,19 @@ def init_db():
             key TEXT PRIMARY KEY,
             value TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS deposits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            year INTEGER NOT NULL,
+            month INTEGER NOT NULL,
+            days INTEGER NOT NULL,
+            duration_hours REAL NOT NULL,
+            month_hours REAL NOT NULL,
+            owed_hours REAL NOT NULL,
+            total_hours REAL NOT NULL,
+            amount_pesos REAL NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+        );
     """
     )
     conn.commit()
@@ -219,6 +232,65 @@ def set_setting(key: str, value: str):
     )
     conn.commit()
     conn.close()
+
+
+def get_tarifa() -> float:
+    """Hourly rate in pesos. Defaults to 400."""
+    try:
+        return float(get_setting("tarifa", "400"))
+    except ValueError:
+        return 400.0
+
+
+def set_tarifa(value: float):
+    set_setting("tarifa", str(value))
+
+
+# ── Deposits ─────────────────────────────────────────────────
+
+
+def add_deposit(
+    year: int,
+    month: int,
+    days: int,
+    duration_hours: float,
+    month_hours: float,
+    owed_hours: float,
+    total_hours: float,
+    amount_pesos: float,
+) -> int:
+    """Record a monthly recharge deposit. Returns deposit ID."""
+    conn = _get_conn()
+    cursor = conn.execute(
+        """INSERT INTO deposits
+           (year, month, days, duration_hours, month_hours, owed_hours,
+            total_hours, amount_pesos)
+           VALUES (?,?,?,?,?,?,?,?)""",
+        (
+            year,
+            month,
+            days,
+            duration_hours,
+            month_hours,
+            owed_hours,
+            total_hours,
+            amount_pesos,
+        ),
+    )
+    conn.commit()
+    cid = cursor.lastrowid
+    conn.close()
+    return cid
+
+
+def get_deposits() -> list[dict]:
+    """All recharge deposits, ordered by month."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT * FROM deposits ORDER BY year, month, id"
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 # ── Stats ─────────────────────────────────────────────────────
