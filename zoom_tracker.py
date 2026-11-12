@@ -179,6 +179,22 @@ def send_whatsapp_message(message: str) -> str:
         return "prefilled"
 
 
+def build_whatsapp_message(month: int, days: int, duration: float, owed: float,
+                           total_hours: float, amount: float) -> str:
+    """Build the French WhatsApp message for a deposit."""
+    msg = (
+        f"Déposé ${amount:,.2f} pour {format_hours_fr(total_hours)}, "
+        f"à consommer en {format_hours_fr(duration)} par jour "
+        f"pendant {days} jours du mois de {MESES_FR[month]}"
+    )
+    if owed > 0:
+        msg += (
+            f". Le dépôt inclut le paiement pour "
+            f"{format_hours_fr(owed)} de la période passée."
+        )
+    return msg
+
+
 def business_days_remaining(today: date = None) -> int:
     """Business days (Mon-Fri) remaining in the current month, excluding today."""
     today = today or date.today()
@@ -517,6 +533,7 @@ class ZoomFrenchTracker(rumps.App):
         self.menu.add(rumps.MenuItem("▶  Mes siguiente", callback=self._next_month))
         self.menu.add(rumps.separator)
         self.menu.add(rumps.MenuItem("➕ Recargar horas", callback=self._add_credits))
+        self.menu.add(rumps.MenuItem("📲 Reenviar WhatsApp a Alicia", callback=self._resend_whatsapp))
         self.menu.add(rumps.MenuItem("📊 Reportes", callback=self._show_reports))
         self.menu.add(rumps.MenuItem(
             f"💰 Tarifa (actual: {format_money(db.get_tarifa())})",
@@ -692,16 +709,7 @@ class ZoomFrenchTracker(rumps.App):
                 rumps.alert("Error", f"No se pudo registrar la recarga:\n{e}")
                 return
             # Notificar a Alicia por WhatsApp (en francés)
-            msg_fr = (
-                f"Déposé ${amount:,.2f} pour {format_hours_fr(total_hours)}, "
-                f"à consommer en {format_hours_fr(duration)} par jour "
-                f"pendant {days} jours du mois de {MESES_FR[now.month]}"
-            )
-            if owed > 0:
-                msg_fr += (
-                    f". Le dépôt inclut le paiement pour "
-                    f"{format_hours_fr(owed)} de la période passée."
-                )
+            msg_fr = build_whatsapp_message(now.month, days, duration, owed, total_hours, amount)
             result = send_whatsapp_message(msg_fr)
             if result == "sent":
                 rumps.notification("📲 Alicia", "WhatsApp enviado ✅", "")
@@ -711,6 +719,26 @@ class ZoomFrenchTracker(rumps.App):
                 rumps.notification("📲 Alicia", "No se pudo abrir WhatsApp", "")
             if self.cal_win:
                 self._load_calendar(now.year, now.month)
+
+    def _resend_whatsapp(self, _):
+        """Re-send the WhatsApp message for the most recent deposit (test/retry)."""
+        deps = db.get_deposits()
+        if not deps:
+            rumps.alert("Reenviar WhatsApp", "No hay depósitos registrados todavía.")
+            return
+        dep = deps[-1]  # newest (ORDER BY year, month, id)
+        msg_fr = build_whatsapp_message(
+            dep["month"], dep["days"], dep["duration_hours"],
+            dep["owed_hours"], dep["total_hours"], dep["amount_pesos"],
+        )
+        _log(f"reenviar WhatsApp: {msg_fr!r}")
+        result = send_whatsapp_message(msg_fr)
+        if result == "sent":
+            rumps.notification("📲 Alicia", "WhatsApp enviado ✅", "")
+        elif result == "prefilled":
+            rumps.notification("📲 Alicia", "Mensaje listo en WhatsApp (presiona Enviar)", "")
+        else:
+            rumps.notification("📲 Alicia", "No se pudo abrir WhatsApp", "")
 
     def _set_tarifa(self, _):
         try:
