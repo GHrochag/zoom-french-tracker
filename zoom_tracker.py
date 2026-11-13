@@ -195,6 +195,19 @@ def build_whatsapp_message(month: int, days: int, duration: float, owed: float,
     return msg
 
 
+def _parse_session_date(text: str, now: datetime) -> datetime | None:
+    """Parse 'YYYY-MM-DD' or a bare day number into a datetime at 09:00."""
+    text = (text or "").strip()
+    try:
+        if "-" in text:
+            y, m, d = text.split("-")
+            return datetime(int(y), int(m), int(d), 9, 0)
+        day = int(text)
+        return datetime(now.year, now.month, day, 9, 0)
+    except (ValueError, TypeError):
+        return None
+
+
 def business_days_remaining(today: date = None) -> int:
     """Business days (Mon-Fri) remaining in the current month, excluding today."""
     today = today or date.today()
@@ -533,6 +546,7 @@ class ZoomFrenchTracker(rumps.App):
         self.menu.add(rumps.MenuItem("▶  Mes siguiente", callback=self._next_month))
         self.menu.add(rumps.separator)
         self.menu.add(rumps.MenuItem("➕ Recargar horas", callback=self._add_credits))
+        self.menu.add(rumps.MenuItem("✍️ Registrar sesión", callback=self._manual_session))
         self.menu.add(rumps.MenuItem("📊 Reportes", callback=self._show_reports))
         self.menu.add(rumps.MenuItem(
             f"💰 Tarifa (actual: {format_money(db.get_tarifa())})",
@@ -718,6 +732,66 @@ class ZoomFrenchTracker(rumps.App):
                 rumps.notification("📲 Alicia", "No se pudo abrir WhatsApp", "")
             if self.cal_win:
                 self._load_calendar(now.year, now.month)
+
+    def _manual_session(self, _):
+        """Record a past session that happened while the app was closed."""
+        now = datetime.now()
+
+        date_win = rumps.Window(
+            title="Registrar sesión",
+            message="Fecha (YYYY-MM-DD o día del mes):",
+            default_text=now.strftime("%Y-%m-%d"),
+            ok="Continuar",
+            cancel="Cancelar",
+            dimensions=(240, 40),
+        )
+        date_resp = date_win.run()
+        if not date_resp.clicked or not date_resp.text:
+            return
+        start = _parse_session_date(date_resp.text, now)
+        if start is None:
+            rumps.alert("Registrar sesión", "Fecha inválida. Usa YYYY-MM-DD o el día (1-31).")
+            return
+
+        dur_win = rumps.Window(
+            title="Registrar sesión",
+            message="¿Duración? (ej. 1:30)",
+            default_text="1:30",
+            ok="Guardar",
+            cancel="Cancelar",
+            dimensions=(200, 40),
+        )
+        dur_resp = dur_win.run()
+        if not dur_resp.clicked or not dur_resp.text:
+            return
+        try:
+            duration = parse_duration(dur_resp.text)
+        except ValueError:
+            rumps.alert("Registrar sesión", "Duración no válida. Usa formato 1:30.")
+            return
+        if duration <= 0:
+            rumps.alert("Registrar sesión", "La duración debe ser mayor a 0.")
+            return
+
+        minutes = duration * 60.0
+        rounded = round_session(minutes)
+        if rounded == 0:
+            rumps.alert("Registrar sesión", "Sesión muy corta (mínimo 3 min).")
+            return
+
+        try:
+            db.add_manual_session(start, minutes, rounded)
+            self._update_display()
+            if self.cal_win:
+                self._load_calendar(start.year, start.month)
+            rumps.notification(
+                "✅ Sesión registrada",
+                f"{format_hours_hhmm(rounded)} descontados · {start.strftime('%d/%m')}",
+                "",
+            )
+        except Exception as e:
+            _log(f"manual_session error: {e!r}")
+            rumps.alert("Error", f"No se pudo registrar la sesión:\n{e}")
 
     def _set_tarifa(self, _):
         try:

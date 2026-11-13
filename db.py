@@ -5,7 +5,7 @@ SQLite-based storage for sessions, credits, and settings.
 
 import sqlite3
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 DB_DIR = Path.home() / ".zoom_french_tracker"
@@ -110,6 +110,27 @@ def cancel_session(session_id: int):
     )
     conn.commit()
     conn.close()
+
+
+def add_manual_session(start_time: datetime, duration_minutes: float, rounded_hours: float) -> int:
+    """Record a manually-entered completed session. Returns session ID."""
+    conn = _get_conn()
+    end = start_time + timedelta(minutes=duration_minutes)
+    cursor = conn.execute(
+        """INSERT INTO sessions
+           (start_time, end_time, duration_minutes, rounded_hours, status)
+           VALUES (?, ?, ?, ?, 'completed')""",
+        (
+            start_time.strftime("%Y-%m-%d %H:%M:%S"),
+            end.strftime("%Y-%m-%d %H:%M:%S"),
+            round(duration_minutes, 1),
+            rounded_hours,
+        ),
+    )
+    conn.commit()
+    sid = cursor.lastrowid
+    conn.close()
+    return sid
 
 
 def get_active_session() -> dict | None:
